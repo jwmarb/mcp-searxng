@@ -15,8 +15,9 @@ However, the results returned by these engines are often unsatisfactory. Firstly
 
 So why not combine the results from multiple search engines!? That’s exactly what a meta-search engine does. SearXNG, an open-source meta-search engine software, can be self-hosted or used via sites provided by enthusiastic community members. For businesses, SearXNG offers a way to maintain privacy and security control while enabling AI Agents to effectively search for the external data they need.
 
-References:  
-- [SearXNG Official Website](https://docs.searxng.org/)  
+References:
+
+- [SearXNG Official Website](https://docs.searxng.org/)
 - [Self-Hosting an Open-Source SearXNG Meta-Search Engine to Search Google, DuckDuckGo, and More at Once](https://ivonblog.com/posts/self-hosting-searxng-docker-instance/)
 
 ## Purpose
@@ -44,6 +45,44 @@ $ uv sync
 ```
 
 ## Running the Service
+
+### Running Both Services with Docker Compose
+
+For a simplified setup, you can use the root-level `docker-compose.yaml` file to run both the SearXNG service and the MCP-SEARXNG service together. This approach automatically handles the network configuration between the two services. This is the fastest way to set up mcp-searxng.
+
+First, ensure you are in the project root directory:
+
+```bash
+$ cd /path/to/mcp-searxng
+```
+
+Then, build and start both services with Docker Compose:
+
+```bash
+$ docker compose build
+$ docker compose up -d
+```
+
+Check the status of running containers:
+
+```bash
+$ docker compose ps
+
+NAME          IMAGE                              COMMAND                  SERVICE   CREATED              STATUS          PORTS
+mcp-searxng   mcp-searxng-mcp                    "uv run server.py"       mcp       About a minute ago   Up 50 seconds   0.0.0.0:5488->5488/tcp, [::]:5488->5488/tcp
+searxng       docker.io/searxng/searxng:latest   "/usr/local/searxng/…"   searxng   About an hour ago    Up 11 minutes   0.0.0.0:8888->8080/tcp, [::]:8888->8080/tcp
+```
+
+Both services are now running:
+
+- **SearXNG**: Accessible at `http://localhost:8888`
+- **MCP-SEARXNG**: Accessible at `http://localhost:5488`
+
+To stop the services:
+
+```bash
+$ docker compose down
+```
 
 ### Running the SearXNG Service
 
@@ -143,8 +182,8 @@ Open `http://localhost:5173` in your browser and perform the following actions:
 3. Click `Connect`. If the status shows "Connected," it means you have successfully connected to the MCP server.
 4. Click the "Tools" tab at the top.
 5. Click the "List Tools" button, and you should see two tools:
-    - `web_search`
-    - `web_url_read`
+   - `web_search`
+   - `web_url_read`
 6. Click `web_search`. On the right, you’ll see the tool’s description and parameters. Enter the keyword you want to search for in the `query` input field, then click the "Run Tool" button.
 
 The effect is shown in the image below:
@@ -173,9 +212,22 @@ uv run server.py --host <your host> --port <your port>
 
 Startup Parameters:
 
-| Parameter        | Required | Default             | Type | Description             |
-|------------------|----------|---------------------|------|-------------------------|
-| `--host`         | No       | `0.0.0.0`          | str  | Host to bind to         |
-| `--port`         | No       | `5488`             | int  | Port to listen on       |
-| `--searxng_url`  | No       | `http://localhost:8888` | str  | SearXNG URL to connect to |
+| Parameter       | Required | Default                 | Type | Description               |
+| --------------- | -------- | ----------------------- | ---- | ------------------------- |
+| `--host`        | No       | `0.0.0.0`               | str  | Host to bind to           |
+| `--port`        | No       | `5488`                  | int  | Port to listen on         |
+| `--searxng_url` | No       | `http://localhost:8888` | str  | SearXNG URL to connect to |
 
+To add it to any MCP configuration file, use the following:
+
+```json
+{
+  "mcpServers": {
+    "searxng": {
+      "url": "http://localhost:5488/sse"
+    }
+  }
+}
+```
+
+Replace `localhost:5488` to whatever containing your mcp-searxng instance.
