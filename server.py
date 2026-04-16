@@ -1,11 +1,7 @@
-from logging import info
 import logging
-from typing import Optional
 from httpx import AsyncClient, HTTPStatusError
 from os import getenv
-from typing import Any
 from markdownify import markdownify as md
-import mcp.types as types
 from mcp.server.fastmcp import FastMCP
 from mcp.server.sse import SseServerTransport
 from mcp.server import Server
@@ -13,7 +9,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Mount, Route
 import uvicorn
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from urllib.parse import quote
 
 # 設定日誌
 logger = logging.getLogger(__name__)
@@ -22,6 +19,8 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("mcp-searxng")
 
 ### 1. 構建呼叫 SearXNG 服務 API 的方法與返回結果的序列化類別 ####
+
+
 class SearchResult(BaseModel):
     url: str
     title: str
@@ -64,8 +63,11 @@ class Response(BaseModel):
     # unresponsive_engines: list[str]
 
 # 呼叫 SearXNG 服務 API
+
+
 async def search(query: str, limit: int = 3) -> str:
-    client = AsyncClient(base_url=str(getenv("SEARXNG_URL", "http://localhost:8080")))
+    client = AsyncClient(base_url=str(
+        getenv("SEARXNG_URL", "http://localhost:8080")))
 
     params: dict[str, str] = {"q": query, "format": "json"}
 
@@ -99,14 +101,13 @@ async def search(query: str, limit: int = 3) -> str:
 
 ### 2. 構建呼叫 MCP 規格中的 list_tools 與 call_tool() 的實作 ####
 @mcp.tool()
-async def web_search(query: str, 
+async def web_search(query: str,
                      count: int = 3) -> str:
     """Performs a web search using the SearxNG API, ideal for general queries, news, articles, and online content. Use this for broad information gathering, recent events, or when you need diverse web sources."""
-    client = AsyncClient(base_url=str(getenv("SEARXNG_URL", "http://localhost:8080")))
+    client = AsyncClient(base_url=str(
+        getenv("SEARXNG_URL", "http://localhost:8080")))
 
-    params: dict[str, str] = {"q": query, "format": "json", "engines": "google"}
-
-    response = await client.get("/search", params=params)
+    response = await client.get(f"/search?q={quote(query)}&format=json")
 
     response.raise_for_status()
 
@@ -144,11 +145,11 @@ async def web_url_read(url: str) -> str:
 
     try:
         async with AsyncClient(follow_redirects=True, headers=headers, timeout=10.0, max_redirects=5) as client:
-                response = await client.get(url)
-                # check if any exception
-                response.raise_for_status()
-                # convert html to markdown
-                return md(response.text)
+            response = await client.get(url)
+            # check if any exception
+            response.raise_for_status()
+            # convert html to markdown
+            return md(response.text)
     except HTTPStatusError as e:
         logger.error(f"HTTP error fetching URL {url}: {str(e)}")
         return None
@@ -157,6 +158,8 @@ async def web_url_read(url: str) -> str:
         return None
 
 # 設定讓 mcp sever 啟用 sse transport 允許 AI Agent 遠端連線使用
+
+
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
     """Create a Starlette application that can server the provied mcp server with SSE."""
     sse = SseServerTransport("/messages/")
@@ -181,22 +184,26 @@ def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlett
         ],
     )
 
+
 # 服務啟動的進入點
 if __name__ == "__main__":
     mcp_server = mcp._mcp_server
 
     import argparse
     import os
-    
-    parser = argparse.ArgumentParser(description='Run MCP-SearXNG SSE-based server')
+
+    parser = argparse.ArgumentParser(
+        description='Run MCP-SearXNG SSE-based server')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=5488, help='Port to listen on')
-    parser.add_argument('--searxng_url', default='http://localhost:8888', help='SearXNG url to connect to')
-    
+    parser.add_argument('--port', type=int, default=5488,
+                        help='Port to listen on')
+    parser.add_argument(
+        '--searxng_url', default='http://localhost:8888', help='SearXNG url to connect to')
+
     args = parser.parse_args()
 
     if os.environ.get('SEARXNG_URL') is None:
-        os.environ['SEARXNG_URL']=args.searxng_url
+        os.environ['SEARXNG_URL'] = args.searxng_url
 
     # Bind SSE request handling to MCP server
     starlette_app = create_starlette_app(mcp_server, debug=True)
