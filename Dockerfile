@@ -7,4 +7,4 @@ COPY . .
 RUN uv venv --python 3.12
 RUN uv sync
 
-ENTRYPOINT [ "uv", "run", "server.py" ]
+ENTRYPOINT [ "uv", "run", "-m", "app" ]
