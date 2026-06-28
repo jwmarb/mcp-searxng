@@ -7,7 +7,8 @@ import os
 import uvicorn
 
 from app import mcp  # noqa: F401
-from app import tools  # noqa: F401  — registers @mcp.tool() decorators
+from app import tools  # noqa: F401
+from app.config import get_settings, warn_unconfigured
 from app.server import create_starlette_app
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +31,9 @@ def main() -> None:
 
     if os.environ.get("SEARXNG_URL") is None:
         os.environ["SEARXNG_URL"] = args.searxng_url
+
+    settings = get_settings()
+    warn_unconfigured(settings)
 
     mcp_server = mcp._mcp_server  # noqa: SLF001
     starlette_app = create_starlette_app(mcp_server, debug=True)
