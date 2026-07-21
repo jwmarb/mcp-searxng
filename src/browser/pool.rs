@@ -450,3 +450,79 @@ async fn handle_list_tabs(pool: &PoolInner, id: &str) -> Result<Vec<TabInfo>> {
     }
     Ok(tabs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_info_creation() {
+        let info = SessionInfo {
+            id: "sess-1".to_string(),
+            created_at: Instant::now(),
+            tab_count: 3,
+            active_url: Some("https://test.com".to_string()),
+            history: vec!["https://first.com".to_string(), "https://second.com".to_string()],
+        };
+        assert_eq!(info.id, "sess-1");
+        assert_eq!(info.tab_count, 3);
+        assert_eq!(info.active_url, Some("https://test.com".to_string()));
+        assert_eq!(info.history.len(), 2);
+    }
+
+    #[test]
+    fn test_session_info_no_active_url() {
+        let info = SessionInfo {
+            id: "sess-1".to_string(),
+            created_at: Instant::now(),
+            tab_count: 0,
+            active_url: None,
+            history: vec![],
+        };
+        assert_eq!(info.id, "sess-1");
+        assert_eq!(info.tab_count, 0);
+        assert_eq!(info.active_url, None);
+        assert_eq!(info.history, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_tab_info_creation() {
+        let tab = TabInfo {
+            index: 0,
+            title: "Test".to_string(),
+            url: "https://test.com".to_string(),
+        };
+        assert_eq!(tab.index, 0);
+        assert_eq!(tab.title, "Test");
+        assert_eq!(tab.url, "https://test.com");
+    }
+
+    #[test]
+    fn test_tab_info_clone() {
+        let tab = TabInfo {
+            index: 1,
+            title: "Page".to_string(),
+            url: "https://page.com".to_string(),
+        };
+        let cloned = tab.clone();
+        assert_eq!(cloned.index, tab.index);
+        assert_eq!(cloned.title, tab.title);
+        assert_eq!(cloned.url, tab.url);
+    }
+
+    #[test]
+    fn test_session_info_clone() {
+        let info = SessionInfo {
+            id: "sess-1".to_string(),
+            created_at: Instant::now(),
+            tab_count: 2,
+            active_url: Some("https://test.com".to_string()),
+            history: vec!["https://first.com".to_string()],
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.id, info.id);
+        assert_eq!(cloned.tab_count, info.tab_count);
+        assert_eq!(cloned.active_url, info.active_url);
+        assert_eq!(cloned.history, info.history);
+    }
+}

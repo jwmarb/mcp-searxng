@@ -2,12 +2,13 @@ use crate::config::Config;
 use crate::error::{CliError, Result};
 use crate::fetch::{ContentFormat, FetchParams, FetchResponse, RenderMode};
 
-const BROWSER_SERVER_URL: &str = "http://localhost:18960";
+use super::util::{extract_title, truncate_content};
+
 const JS_HEAVY_THRESHOLD: usize = 100;
 
-pub async fn hybrid_fetch(_config: &Config, params: &FetchParams) -> Result<FetchResponse> {
+pub async fn hybrid_fetch(config: &Config, params: &FetchParams) -> Result<FetchResponse> {
     if params.render_mode == RenderMode::Render {
-        return browser_fetch(params).await;
+        return browser_fetch(config, params).await;
     }
 
     let client = reqwest::Client::new();
@@ -38,18 +39,19 @@ pub async fn hybrid_fetch(_config: &Config, params: &FetchParams) -> Result<Fetc
         });
     }
 
-    browser_fetch(params).await
+    browser_fetch(config, params).await
 }
 
-async fn browser_fetch(params: &FetchParams) -> Result<FetchResponse> {
+async fn browser_fetch(config: &Config, params: &FetchParams) -> Result<FetchResponse> {
     let client = reqwest::Client::new();
+    let browser_url = &config.browser_server_url;
 
     let session_id = format!("sess-{}", std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis()));
-    
+
     let navigate_resp = client
-        .post(format!("{BROWSER_SERVER_URL}/api/navigate"))
+        .post(format!("{browser_url}/api/navigate"))
         .json(&serde_json::json!({"session": &session_id, "url": &params.url}))
         .send()
         .await
@@ -63,7 +65,7 @@ async fn browser_fetch(params: &FetchParams) -> Result<FetchResponse> {
     }
 
     let snapshot_resp = client
-        .get(format!("{BROWSER_SERVER_URL}/api/snapshot?session={session_id}"))
+        .get(format!("{browser_url}/api/snapshot?session={session_id}"))
         .send()
         .await
         .map_err(|e| CliError::Browser(format!("Browser snapshot failed: {e}")))?;
@@ -88,16 +90,6 @@ async fn browser_fetch(params: &FetchParams) -> Result<FetchResponse> {
     })
 }
 
-fn extract_title(html: &str) -> String {
-    if let Some(start) = html.find("<title>") {
-        let rest = &html[start + 7..];
-        if let Some(end) = rest.find("</title>") {
-            return rest[..end].trim().to_string();
-        }
-    }
-    String::new()
-}
-
 fn extract_title_from_snapshot(snapshot: &str) -> String {
     for line in snapshot.lines() {
         let trimmed = line.trim();
@@ -116,16 +108,60 @@ fn clean_snapshot_content(snapshot: &str) -> String {
         .join("\n")
 }
 
-fn truncate_content(content: &str, max_chars: usize) -> String {
-    if content.len() <= max_chars {
-        content.to_string()
-    } else {
-        let cutoff = content
-            .char_indices()
-            .take_while(|(i, _)| *i < max_chars)
-            .last()
-            .map(|(i, _)| i + 1)
-            .unwrap_or(max_chars);
-        format!("{}...", &content[..cutoff])
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_title_from_snapshot_h1() {
+        let snapshot = "# Page Title\ncontent here";
+        assert_eq!(extract_title_from_snapshot(snapshot), "Page Title");
+    }
+
+    #[test]
+    fn test_extract_title_from_snapshot_h2_ignored() {
+        let snapshot = "## Not h1\ncontent";
+        assert_eq!(extract_title_from_snapshot(snapshot), "");
+    }
+
+    #[test]
+    fn test_extract_title_from_snapshot_no_heading() {
+        let snapshot = "No heading here";
+        assert_eq!(extract_title_from_snapshot(snapshot), "");
+    }
+
+    #[test]
+    fn test_extract_title_from_snapshot_indented() {
+        let snapshot = "  # Indented Title";
+        assert_eq!(extract_title_from_snapshot(snapshot), "Indented Title");
+    }
+
+    #[test]
+    fn test_extract_title_from_snapshot_multiple() {
+        let snapshot = "# First\n# Second";
+        assert_eq!(extract_title_from_snapshot(snapshot), "First");
+    }
+
+    #[test]
+    fn test_clean_snapshot_content_removes_box_lines() {
+        let snapshot = "[box=1,2,3,4]\nNormal Line\n[box=5,6,7,8]";
+        assert_eq!(clean_snapshot_content(snapshot), "Normal Line");
+    }
+
+    #[test]
+    fn test_clean_snapshot_content_keeps_normal_lines() {
+        let snapshot = "Line 1\nLine 2\nLine 3";
+        assert_eq!(clean_snapshot_content(snapshot), "Line 1\nLine 2\nLine 3");
+    }
+
+    #[test]
+    fn test_clean_snapshot_content_empty() {
+        assert_eq!(clean_snapshot_content(""), "");
+    }
+
+    #[test]
+    fn test_clean_snapshot_content_preserves_whitespace() {
+        let snapshot = "  Indented\n[box=1,2,3,4]";
+        assert_eq!(clean_snapshot_content(snapshot), "  Indented");
     }
 }

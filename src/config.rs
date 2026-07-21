@@ -20,6 +20,9 @@ pub struct Config {
 
     #[serde(default)]
     pub chrome_path: Option<String>,
+
+    #[serde(default = "default_browser_server_url")]
+    pub browser_server_url: String,
 }
 
 // defaults
@@ -30,6 +33,10 @@ fn default_searxng_url() -> String {
 
 fn default_server_port() -> u16 {
     18960
+}
+
+fn default_browser_server_url() -> String {
+    "http://localhost:18960".to_string()
 }
 
 /// Resolve the XDG config path for `searxng-cli/config.yaml`.
@@ -80,6 +87,9 @@ impl Config {
         if let Ok(val) = std::env::var("SEARXNG_CHROME_PATH") {
             config.chrome_path = Some(val);
         }
+        if let Ok(val) = std::env::var("SEARXNG_BROWSER_SERVER_URL") {
+            config.browser_server_url = val;
+        }
 
         config
     }
@@ -91,6 +101,7 @@ impl Default for Config {
             searxng_url: default_searxng_url(),
             server_port: default_server_port(),
             chrome_path: None,
+            browser_server_url: default_browser_server_url(),
         }
     }
 }
@@ -102,6 +113,159 @@ impl fmt::Display for Config {
         if let Some(ref path) = self.chrome_path {
             writeln!(f, "Chrome path: {}", path)?;
         }
+        writeln!(f, "Browser server URL: {}", self.browser_server_url)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn cleanup_env() {
+        std::env::remove_var("SEARXNG_URL");
+        std::env::remove_var("SEARXNG_SERVER_PORT");
+        std::env::remove_var("SEARXNG_CHROME_PATH");
+        std::env::remove_var("SEARXNG_BROWSER_SERVER_URL");
+    }
+
+    fn with_env<F: FnOnce()>(f: F) {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("SEARXNG_URL");
+        std::env::remove_var("SEARXNG_SERVER_PORT");
+        std::env::remove_var("SEARXNG_CHROME_PATH");
+        std::env::remove_var("SEARXNG_BROWSER_SERVER_URL");
+        f();
+        std::env::remove_var("SEARXNG_URL");
+        std::env::remove_var("SEARXNG_SERVER_PORT");
+        std::env::remove_var("SEARXNG_CHROME_PATH");
+        std::env::remove_var("SEARXNG_BROWSER_SERVER_URL");
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        let config = Config::default();
+        assert_eq!(config.searxng_url, "http://localhost:8888");
+        assert_eq!(config.server_port, 18960);
+        assert_eq!(config.chrome_path, None);
+        assert_eq!(config.browser_server_url, "http://localhost:18960");
+    }
+
+    #[test]
+    fn test_config_load_from_yaml_file() {
+        with_env(|| {
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            writeln!(file, "searxng_url: http://custom:9999").unwrap();
+            writeln!(file, "server_port: 3000").unwrap();
+            writeln!(file, "chrome_path: /usr/bin/google-chrome").unwrap();
+
+            let config = Config::load_with_path(Some(file.path().to_str().unwrap().to_string()));
+            assert_eq!(config.searxng_url, "http://custom:9999");
+            assert_eq!(config.server_port, 3000);
+            assert_eq!(config.chrome_path, Some("/usr/bin/google-chrome".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_config_load_with_path_none() {
+        with_env(|| {
+            let config = Config::load_with_path(None);
+            assert_eq!(config.searxng_url, "http://localhost:8888");
+            assert_eq!(config.server_port, 18960);
+            assert_eq!(config.chrome_path, None);
+            assert_eq!(config.browser_server_url, "http://localhost:18960");
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_url() {
+        with_env(|| {
+            std::env::set_var("SEARXNG_URL", "http://env-url:7777");
+            let config = Config::load_with_path(None);
+            assert_eq!(config.searxng_url, "http://env-url:7777");
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_port() {
+        with_env(|| {
+            std::env::set_var("SEARXNG_SERVER_PORT", "4000");
+            let config = Config::load_with_path(None);
+            assert_eq!(config.server_port, 4000);
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_chrome_path() {
+        with_env(|| {
+            std::env::set_var("SEARXNG_CHROME_PATH", "/opt/chrome");
+            let config = Config::load_with_path(None);
+            assert_eq!(config.chrome_path, Some("/opt/chrome".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_browser_server_url() {
+        with_env(|| {
+            std::env::set_var("SEARXNG_BROWSER_SERVER_URL", "http://custom-browser:9999");
+            let config = Config::load_with_path(None);
+            assert_eq!(config.browser_server_url, "http://custom-browser:9999");
+        });
+    }
+
+    #[test]
+    fn test_env_vars_override_file_values() {
+        with_env(|| {
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            writeln!(file, "searxng_url: http://file:1111").unwrap();
+            writeln!(file, "server_port: 2000").unwrap();
+
+            std::env::set_var("SEARXNG_URL", "http://env:2222");
+            std::env::set_var("SEARXNG_SERVER_PORT", "3000");
+            std::env::set_var("SEARXNG_CHROME_PATH", "/env/chrome");
+            std::env::set_var("SEARXNG_BROWSER_SERVER_URL", "http://env-browser:5555");
+
+            let config = Config::load_with_path(Some(file.path().to_str().unwrap().to_string()));
+            assert_eq!(config.searxng_url, "http://env:2222");
+            assert_eq!(config.server_port, 3000);
+            assert_eq!(config.chrome_path, Some("/env/chrome".to_string()));
+            assert_eq!(config.browser_server_url, "http://env-browser:5555");
+        });
+    }
+
+    #[test]
+    fn test_display_without_chrome_path() {
+        let config = Config::default();
+        let output = format!("{}", config);
+        assert!(output.contains("SearXNG URL: http://localhost:8888"));
+        assert!(output.contains("Server port: 18960"));
+        assert!(!output.contains("Chrome path:"));
+    }
+
+    #[test]
+    fn test_display_with_chrome_path() {
+        let config = Config {
+            searxng_url: "http://localhost:8888".to_string(),
+            server_port: 18960,
+            chrome_path: Some("/usr/bin/chrome".to_string()),
+            browser_server_url: "http://localhost:18960".to_string(),
+        };
+        let output = format!("{}", config);
+        assert!(output.contains("Chrome path: /usr/bin/chrome"));
+    }
+
+    #[test]
+    fn test_nonexistent_custom_path_returns_defaults() {
+        with_env(|| {
+            let config = Config::load_with_path(Some("/nonexistent/path/config.yaml".to_string()));
+            assert_eq!(config.searxng_url, "http://localhost:8888");
+            assert_eq!(config.server_port, 18960);
+            assert_eq!(config.chrome_path, None);
+            assert_eq!(config.browser_server_url, "http://localhost:18960");
+        });
     }
 }

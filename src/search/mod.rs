@@ -123,3 +123,208 @@ fn format_as_markdown(response: &SearchResponse) -> String {
 
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::types::SearchResult;
+
+    fn make_result(title: &str, url: &str, content: &str) -> SearchResult {
+        SearchResult {
+            title: title.to_string(),
+            url: url.to_string(),
+            content: content.to_string(),
+            engine: String::new(),
+            engines: vec![],
+            score: 0.0,
+            published_date: None,
+            img_src: None,
+            parsed_url: None,
+            template: None,
+            thumbnail: None,
+            priority: None,
+            positions: None,
+            category: None,
+        }
+    }
+
+    #[test]
+    fn test_format_response_json() {
+        let response = SearchResponse {
+            results: vec![make_result("Test", "https://test.com", "Content")],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = Search::format_response(&response, OutputFormat::Json);
+        assert!(formatted.contains("\"results\""));
+        assert!(formatted.contains("Test"));
+    }
+
+    #[test]
+    fn test_format_response_text() {
+        let response = SearchResponse {
+            results: vec![make_result("Test", "https://test.com", "Content")],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = Search::format_response(&response, OutputFormat::Text);
+        assert!(formatted.contains("Test"));
+        assert!(formatted.contains("https://test.com"));
+    }
+
+    #[test]
+    fn test_format_response_markdown() {
+        let response = SearchResponse {
+            results: vec![make_result("Test", "https://test.com", "Content")],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = Search::format_response(&response, OutputFormat::Markdown);
+        assert!(formatted.contains("### 1."));
+        assert!(formatted.contains("[Test](https://test.com)"));
+    }
+
+    #[test]
+    fn test_format_as_text_empty_results() {
+        let response = SearchResponse {
+            results: vec![],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_text(&response);
+        assert_eq!(formatted, "");
+    }
+
+    #[test]
+    fn test_format_as_text_long_content_truncation() {
+        let long_content = "A".repeat(300);
+        let response = SearchResponse {
+            results: vec![make_result("Test", "https://test.com", &long_content)],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_text(&response);
+        assert!(formatted.contains("..."));
+        assert!(formatted.len() < 300);
+    }
+
+    #[test]
+    fn test_format_as_text_no_content() {
+        let response = SearchResponse {
+            results: vec![make_result("Test", "https://test.com", "")],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_text(&response);
+        assert!(formatted.contains("Test"));
+        assert!(!formatted.contains("..."));
+    }
+
+    #[test]
+    fn test_format_as_markdown_empty_results() {
+        let response = SearchResponse {
+            results: vec![],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_markdown(&response);
+        assert_eq!(formatted, "");
+    }
+
+    #[test]
+    fn test_format_as_markdown_multiple_results() {
+        let response = SearchResponse {
+            results: vec![
+                make_result("First", "https://first.com", "Content 1"),
+                make_result("Second", "https://second.com", "Content 2"),
+            ],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_markdown(&response);
+        assert!(formatted.contains("### 1."));
+        assert!(formatted.contains("### 2."));
+        assert!(formatted.contains("[First](https://first.com)"));
+        assert!(formatted.contains("[Second](https://second.com)"));
+    }
+
+    #[test]
+    fn test_format_as_text_multiple_results() {
+        let response = SearchResponse {
+            results: vec![
+                make_result("First", "https://first.com", "Content 1"),
+                make_result("Second", "https://second.com", "Content 2"),
+            ],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_text(&response);
+        assert!(formatted.contains("1."));
+        assert!(formatted.contains("2."));
+        assert!(formatted.contains("First"));
+        assert!(formatted.contains("Second"));
+    }
+
+    #[test]
+    fn test_format_as_markdown_long_content_truncation() {
+        let long_content = "A".repeat(300);
+        let response = SearchResponse {
+            results: vec![make_result("Test", "https://test.com", &long_content)],
+            answers: vec![],
+            corrections: vec![],
+            suggestions: vec![],
+            infoboxes: vec![],
+            unresponsive_engines: vec![],
+            query: None,
+            number_of_results: None,
+        };
+        let formatted = format_as_markdown(&response);
+        assert!(formatted.contains("..."));
+        assert!(formatted.len() < 300);
+    }
+}

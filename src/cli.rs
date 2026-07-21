@@ -68,6 +68,9 @@ pub enum Command {
 
     /// Kill a browser instance
     Kill(KillArgs),
+
+    /// Get session info
+    SessionInfo(SessionInfoArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -130,7 +133,7 @@ pub struct FetchArgs {
 pub struct NavigateArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 
     /// URL to navigate to
     pub url: String,
@@ -140,14 +143,14 @@ pub struct NavigateArgs {
 pub struct SnapshotArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 }
 
 #[derive(Parser, Debug)]
 pub struct ClickArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 
     /// Element selector
     pub selector: String,
@@ -157,7 +160,7 @@ pub struct ClickArgs {
 pub struct FillArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 
     /// Element selector
     pub selector: String,
@@ -170,7 +173,7 @@ pub struct FillArgs {
 pub struct EvaluateArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 
     /// JavaScript expression to evaluate
     pub js: String,
@@ -180,7 +183,7 @@ pub struct EvaluateArgs {
 pub struct ScreenshotArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 
     /// Output file path
     #[arg(long)]
@@ -195,7 +198,7 @@ pub struct ScreenshotArgs {
 pub struct TabsArgs {
     /// Browser session ID
     #[arg(long)]
-    pub id: Option<String>,
+    pub session: String,
 
     /// Action to perform
     #[arg(long)]
@@ -230,4 +233,36 @@ pub struct KillArgs {
     /// Browser session ID
     #[arg(long)]
     pub id: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct SessionInfoArgs {
+    /// Browser session ID
+    #[arg(long)]
+    pub session: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tab_action_as_str_list() {
+        assert_eq!(TabAction::List.as_str(), "list");
+    }
+
+    #[test]
+    fn test_tab_action_as_str_new() {
+        assert_eq!(TabAction::New.as_str(), "new");
+    }
+
+    #[test]
+    fn test_tab_action_as_str_close() {
+        assert_eq!(TabAction::Close.as_str(), "close");
+    }
+
+    #[test]
+    fn test_tab_action_as_str_select() {
+        assert_eq!(TabAction::Select.as_str(), "select");
+    }
 }

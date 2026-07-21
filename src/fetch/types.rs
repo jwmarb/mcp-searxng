@@ -42,3 +42,38 @@ impl Default for RenderMode {
         Self::Lightweight
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_content_format_default_is_markdown() {
+        assert_eq!(ContentFormat::default(), ContentFormat::Markdown);
+    }
+
+    #[test]
+    fn test_render_mode_default_is_lightweight() {
+        assert_eq!(RenderMode::default(), RenderMode::Lightweight);
+    }
+
+    #[test]
+    fn test_content_format_equality() {
+        assert_eq!(ContentFormat::Markdown, ContentFormat::Markdown);
+    }
+
+    #[test]
+    fn test_content_format_inequality() {
+        assert_ne!(ContentFormat::Markdown, ContentFormat::Text);
+    }
+
+    #[test]
+    fn test_render_mode_equality() {
+        assert_eq!(RenderMode::Lightweight, RenderMode::Lightweight);
+    }
+
+    #[test]
+    fn test_render_mode_inequality() {
+        assert_ne!(RenderMode::Lightweight, RenderMode::Render);
+    }
+}

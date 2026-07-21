@@ -1,66 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use tokio::sync::RwLock;
 
 use crate::error::{CliError, Result};
 use crate::browser::{BrowserPoolHandle, TabInfo};
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct HistoryEntry {
-    pub timestamp: String,
-    pub command: String,
-    pub detail: String,
-    pub duration_ms: u64,
-    pub success: bool,
-}
-
-fn iso_timestamp() -> String {
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    format_timestamp(dur)
-}
-
-fn instant_to_iso(instant: Instant) -> String {
-    let now = SystemTime::now();
-    let elapsed = now.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let instant_elapsed = instant.elapsed();
-    let created = elapsed.saturating_sub(instant_elapsed);
-    format_timestamp(created)
-}
-
-fn format_timestamp(dur: std::time::Duration) -> String {
-    let secs = dur.as_secs();
-    let nanos = dur.subsec_nanos();
-
-    // UTC → broken-down date/time (no external crate)
-    let days = secs / 86_400;
-    let tod = secs % 86_400;
-    let hh = tod / 3600;
-    let mm = (tod % 3600) / 60;
-    let ss = tod % 60;
-
-    let mut y = 1970i64;
-    let mut d = days as i64;
-    loop {
-        let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-        let yd = if leap { 366 } else { 365 };
-        if d < yd { break; }
-        d -= yd;
-        y += 1;
-    }
-    let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-    let md = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut m = 1u32;
-    for &mlen in &md {
-        if d < mlen as i64 { break; }
-        d -= mlen as i64;
-        m += 1;
-    }
-    let day = d + 1;
-
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z", y, m, day, hh, mm, ss, nanos)
-}
+use super::history::{with_history, HistoryEntry, instant_to_iso, iso_timestamp};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionInfo {
@@ -86,18 +33,6 @@ impl SessionManager {
         }
     }
 
-    async fn record(&self, id: &str, command: &str, detail: &str, duration_ms: u64, success: bool) {
-        let entry = HistoryEntry {
-            timestamp: iso_timestamp(),
-            command: command.to_string(),
-            detail: detail.to_string(),
-            duration_ms,
-            success,
-        };
-        let mut hist = self.history.write().await;
-        hist.entry(id.to_string()).or_default().push(entry);
-    }
-
     pub async fn navigate(&self, id: &str, url: &str) -> Result<()> {
         let start = Instant::now();
         let mut ok = true;
@@ -109,83 +44,44 @@ impl SessionManager {
         if ok && self.pool.goto(id, url).await.is_err() {
             ok = false;
         }
+        let result = if ok { Ok(()) } else { Err(CliError::Browser("Navigation failed".to_string())) };
         let elapsed = start.elapsed().as_millis() as u64;
-        self.record(id, "navigate", url, elapsed, ok).await;
-        if ok { Ok(()) } else { Err(CliError::Browser("Navigation failed".to_string())) }
+        record_manual(&self.history, id, "navigate", url, elapsed, result.is_ok()).await;
+        result
     }
 
     pub async fn snapshot(&self, id: &str) -> Result<String> {
-        let start = Instant::now();
-        let result = self.pool.snapshot(id).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
-        self.record(id, "snapshot", "", elapsed, success).await;
-        result
+        with_history(&self.history, id, "snapshot", "", || self.pool.snapshot(id)).await
     }
 
     pub async fn click(&self, id: &str, selector: &str) -> Result<()> {
-        let start = Instant::now();
-        let result = self.pool.click(id, selector).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
-        self.record(id, "click", selector, elapsed, success).await;
-        result
+        with_history(&self.history, id, "click", selector, || self.pool.click(id, selector)).await
     }
 
     pub async fn fill(&self, id: &str, selector: &str, value: &str) -> Result<()> {
-        let start = Instant::now();
-        let result = self.pool.fill(id, selector, value).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
         let detail = format!("{} = {}", selector, value);
-        self.record(id, "fill", &detail, elapsed, success).await;
-        result
+        with_history(&self.history, id, "fill", &detail, || self.pool.fill(id, selector, value)).await
     }
 
     pub async fn evaluate(&self, id: &str, script: &str) -> Result<serde_json::Value> {
-        let start = Instant::now();
-        let result = self.pool.evaluate(id, script).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
-        self.record(id, "evaluate", script, elapsed, success).await;
-        result
+        with_history(&self.history, id, "evaluate", script, || self.pool.evaluate(id, script)).await
     }
 
     pub async fn screenshot(&self, id: &str) -> Result<Vec<u8>> {
-        let start = Instant::now();
-        let result = self.pool.screenshot(id).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
-        self.record(id, "screenshot", "", elapsed, success).await;
-        result
+        with_history(&self.history, id, "screenshot", "", || self.pool.screenshot(id)).await
     }
 
     pub async fn new_tab(&self, id: &str, url: Option<&str>) -> Result<()> {
-        let start = Instant::now();
-        let result = self.pool.new_tab(id, url).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
         let detail = url.map(|u| u.to_string()).unwrap_or_default();
-        self.record(id, "new_tab", &detail, elapsed, success).await;
-        result
+        with_history(&self.history, id, "new_tab", &detail, || self.pool.new_tab(id, url)).await
     }
 
     pub async fn close_tab(&self, id: &str, index: usize) -> Result<()> {
-        let start = Instant::now();
-        let result = self.pool.close_tab(id, index).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
-        self.record(id, "close_tab", &index.to_string(), elapsed, success).await;
-        result
+        with_history(&self.history, id, "close_tab", &index.to_string(), || self.pool.close_tab(id, index)).await
     }
 
     pub async fn select_tab(&self, id: &str, index: usize) -> Result<()> {
-        let start = Instant::now();
-        let result = self.pool.select_tab(id, index).await;
-        let elapsed = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
-        self.record(id, "select_tab", &index.to_string(), elapsed, success).await;
-        result
+        with_history(&self.history, id, "select_tab", &index.to_string(), || self.pool.select_tab(id, index)).await
     }
 
     pub async fn list_tabs(&self, id: &str) -> Result<Vec<TabInfo>> {
@@ -217,5 +113,125 @@ impl SessionManager {
                 }
             })
             .collect()
+    }
+}
+
+async fn record_manual(
+    history: &Arc<RwLock<HashMap<String, Vec<HistoryEntry>>>>,
+    id: &str,
+    command: &str,
+    detail: &str,
+    duration_ms: u64,
+    success: bool,
+) {
+    let entry = HistoryEntry {
+        timestamp: iso_timestamp(),
+        command: command.to_string(),
+        detail: detail.to_string(),
+        duration_ms,
+        success,
+    };
+    let mut hist = history.write().await;
+    hist.entry(id.to_string()).or_default().push(entry);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::history;
+    use std::time::Duration;
+
+    #[test]
+    fn test_format_timestamp_epoch_zero() {
+        let ts = history::format_timestamp(Duration::from_secs(0));
+        assert_eq!(ts, "1970-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn test_format_timestamp_2023_jan_01() {
+        let ts = history::format_timestamp(Duration::from_secs(1672531200));
+        assert_eq!(ts, "2023-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn test_format_timestamp_leap_year_2020_jan_01() {
+        let ts = history::format_timestamp(Duration::from_secs(1577836800));
+        assert_eq!(ts, "2020-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn test_format_timestamp_year_end_boundary() {
+        let ts = history::format_timestamp(Duration::from_secs(1704067199));
+        assert_eq!(ts, "2023-12-31T23:59:59.000000000Z");
+    }
+
+    #[test]
+    fn test_format_timestamp_with_nanos() {
+        let dur = Duration::new(0, 123456789);
+        let ts = history::format_timestamp(dur);
+        assert_eq!(ts, "1970-01-01T00:00:00.123456789Z");
+    }
+
+    #[test]
+    fn test_iso_timestamp_valid_format() {
+        let ts = history::iso_timestamp();
+        assert_eq!(ts.len(), 30, "iso_timestamp produced invalid length: {}", ts);
+        assert!(ts.ends_with('Z'), "iso_timestamp should end with Z: {}", ts);
+        let parts: Vec<&str> = ts.splitn(2, 'T').collect();
+        assert_eq!(parts.len(), 2, "iso_timestamp missing T separator: {}", ts);
+        let date = parts[0];
+        assert_eq!(date.len(), 10, "date part wrong length: {}", date);
+        assert!(date.chars().nth(4).unwrap() == '-', "date format wrong: {}", date);
+        let time = parts[1].strip_suffix('Z').unwrap();
+        assert_eq!(time.len(), 18, "time part wrong length: {}", time);
+    }
+
+    #[test]
+    fn test_history_entry_serialization() {
+        let entry = HistoryEntry {
+            timestamp: "2023-01-01T00:00:00.000000000Z".to_string(),
+            command: "navigate".to_string(),
+            detail: "https://example.com".to_string(),
+            duration_ms: 150,
+            success: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["timestamp"], "2023-01-01T00:00:00.000000000Z");
+        assert_eq!(parsed["command"], "navigate");
+        assert_eq!(parsed["detail"], "https://example.com");
+        assert_eq!(parsed["duration_ms"], 150);
+        assert_eq!(parsed["success"], true);
+    }
+
+    #[test]
+    fn test_session_info_serialization() {
+        let info = SessionInfo {
+            id: "sess-1".to_string(),
+            created_at: "2023-06-15T12:00:00.000000000Z".to_string(),
+            tab_count: 3,
+            active_tab: 1,
+            active_url: Some("https://example.com".to_string()),
+            history: vec![HistoryEntry {
+                timestamp: "2023-06-15T12:00:01.000000000Z".to_string(),
+                command: "navigate".to_string(),
+                detail: "https://example.com".to_string(),
+                duration_ms: 100,
+                success: true,
+            }],
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["id"], "sess-1");
+        assert_eq!(parsed["tab_count"], 3);
+        assert_eq!(parsed["active_tab"], 1);
+        assert_eq!(parsed["active_url"], "https://example.com");
+        assert_eq!(parsed["history"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_format_timestamp_century_non_leap() {
+        let ts = history::format_timestamp(Duration::from_secs(4102444800));
+        assert_eq!(ts, "2100-01-01T00:00:00.000000000Z");
     }
 }

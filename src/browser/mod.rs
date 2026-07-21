@@ -59,3 +59,46 @@ impl Default for BrowserManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_browser_manager_new() {
+        let manager = BrowserManager::new();
+        assert!(manager.inner.blocking_read().is_none());
+    }
+
+    #[test]
+    fn test_browser_manager_default() {
+        let manager = BrowserManager::default();
+        assert!(manager.inner.blocking_read().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_browser_not_launched() {
+        let manager = BrowserManager::new();
+        let result = manager.get_browser().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_without_launch() {
+        let manager = BrowserManager::new();
+        let result = manager.shutdown().await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_tab_info_creation() {
+        let tab = TabInfo {
+            index: 0,
+            title: "Test".to_string(),
+            url: "https://test.com".to_string(),
+        };
+        assert_eq!(tab.index, 0);
+        assert_eq!(tab.title, "Test");
+        assert_eq!(tab.url, "https://test.com");
+    }
+}

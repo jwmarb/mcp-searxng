@@ -2,6 +2,27 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use thiserror::Error;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ErrorCode {
+    Success,
+    Client,    // exit code 1
+    Server,    // exit code 2
+    Timeout,   // exit code 3
+    Session,   // exit code 4
+}
+
+impl ErrorCode {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            ErrorCode::Success => 0,
+            ErrorCode::Client => 1,
+            ErrorCode::Server => 2,
+            ErrorCode::Timeout => 3,
+            ErrorCode::Session => 4,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error("SearXNG API error: {0}")]
@@ -30,12 +51,16 @@ pub enum CliError {
 
     #[error("URL error: {0}")]
     Url(#[from] url::ParseError),
+
+    #[error("Session ID is required. Use --session <ID>")]
+    SessionRequired,
 }
 
 impl IntoResponse for CliError {
     fn into_response(self) -> axum::response::Response {
         let (status, body) = match &self {
             CliError::SessionNotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+            CliError::SessionRequired => (StatusCode::BAD_REQUEST, self.to_string()),
             CliError::ServerNotRunning => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             CliError::Http(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
@@ -44,7 +69,209 @@ impl IntoResponse for CliError {
     }
 }
 
+impl CliError {
+    pub fn error_code(&self) -> ErrorCode {
+        match self {
+            CliError::Searxng(_) => ErrorCode::Server,
+            CliError::Http(e) => {
+                if e.is_timeout() {
+                    ErrorCode::Timeout
+                } else {
+                    ErrorCode::Server
+                }
+            }
+            CliError::Browser(_) => ErrorCode::Server,
+            CliError::SessionNotFound(_) => ErrorCode::Session,
+            CliError::SessionRequired => ErrorCode::Session,
+            CliError::ServerNotRunning => ErrorCode::Server,
+            CliError::Config(_) => ErrorCode::Client,
+            CliError::Io(_) => ErrorCode::Client,
+            CliError::Json(_) => ErrorCode::Client,
+            CliError::Url(_) => ErrorCode::Client,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, CliError>;
 
 unsafe impl Send for CliError {}
 unsafe impl Sync for CliError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_string_searxng() {
+        let e = CliError::Searxng("bad query".into());
+        assert_eq!(e.to_string(), "SearXNG API error: bad query");
+    }
+
+    #[test]
+    fn test_to_string_browser() {
+        let e = CliError::Browser("timeout".into());
+        assert_eq!(e.to_string(), "Browser error: timeout");
+    }
+
+    #[test]
+    fn test_to_string_session_not_found() {
+        let e = CliError::SessionNotFound("abc123".into());
+        assert_eq!(e.to_string(), "Session 'abc123' not found");
+    }
+
+    #[test]
+    fn test_to_string_server_not_running() {
+        let e = CliError::ServerNotRunning;
+        assert_eq!(e.to_string(), "Server is not running");
+    }
+
+    #[test]
+    fn test_to_string_config() {
+        let e = CliError::Config("missing key".into());
+        assert_eq!(e.to_string(), "Config error: missing key");
+    }
+
+    #[test]
+    fn test_into_response_session_not_found() {
+        let e = CliError::SessionNotFound("x".into());
+        let resp = e.into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_into_response_server_not_running() {
+        let e = CliError::ServerNotRunning;
+        let resp = e.into_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_into_response_http() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reqwest_err = rt.block_on(async {
+            reqwest::get("http://127.0.0.1:1").await.unwrap_err()
+        });
+        let e = CliError::Http(reqwest_err);
+        let resp = e.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_into_response_default_internal() {
+        let e = CliError::Searxng("x".into());
+        let resp = e.into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no file");
+        let e: CliError = io_err.into();
+        assert!(matches!(e, CliError::Io(_)));
+    }
+
+    #[test]
+    fn test_from_serde_json_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
+        let e: CliError = json_err.into();
+        assert!(matches!(e, CliError::Json(_)));
+    }
+
+    #[test]
+    fn test_from_url_parse_error() {
+        let url_err = "not a url".parse::<url::Url>().unwrap_err();
+        let e: CliError = url_err.into();
+        assert!(matches!(e, CliError::Url(_)));
+    }
+
+    #[test]
+    fn test_error_code_searxng() {
+        assert_eq!(CliError::Searxng("x".into()).error_code(), ErrorCode::Server);
+    }
+
+    #[test]
+    fn test_error_code_browser() {
+        assert_eq!(CliError::Browser("x".into()).error_code(), ErrorCode::Server);
+    }
+
+    #[test]
+    fn test_error_code_session_not_found() {
+        assert_eq!(CliError::SessionNotFound("x".into()).error_code(), ErrorCode::Session);
+    }
+
+    #[test]
+    fn test_error_code_server_not_running() {
+        assert_eq!(CliError::ServerNotRunning.error_code(), ErrorCode::Server);
+    }
+
+    #[test]
+    fn test_error_code_config() {
+        assert_eq!(CliError::Config("x".into()).error_code(), ErrorCode::Client);
+    }
+
+    #[test]
+    fn test_error_code_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "no file");
+        assert_eq!(CliError::from(io_err).error_code(), ErrorCode::Client);
+    }
+
+    #[test]
+    fn test_error_code_json() {
+        let json_err = serde_json::from_str::<serde_json::Value>("bad").unwrap_err();
+        assert_eq!(CliError::from(json_err).error_code(), ErrorCode::Client);
+    }
+
+    #[test]
+    fn test_error_code_url() {
+        let url_err = "not a url".parse::<url::Url>().unwrap_err();
+        assert_eq!(CliError::from(url_err).error_code(), ErrorCode::Client);
+    }
+
+    #[test]
+    fn test_error_code_http_timeout() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(1))
+            .build()
+            .unwrap();
+        let reqwest_err = rt.block_on(async {
+            client.get("http://10.255.255.1:9999").send().await.unwrap_err()
+        });
+        assert!(reqwest_err.is_timeout(), "expected timeout error, got: {}", reqwest_err);
+        assert_eq!(CliError::Http(reqwest_err).error_code(), ErrorCode::Timeout);
+    }
+
+    #[test]
+    fn test_error_code_http_non_timeout() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reqwest_err = rt.block_on(async { reqwest::get("http://127.0.0.1:1").await.unwrap_err() });
+        assert_eq!(CliError::Http(reqwest_err).error_code(), ErrorCode::Server);
+    }
+
+    #[test]
+    fn test_to_string_session_required() {
+        let e = CliError::SessionRequired;
+        assert_eq!(e.to_string(), "Session ID is required. Use --session <ID>");
+    }
+
+    #[test]
+    fn test_into_response_session_required() {
+        let e = CliError::SessionRequired;
+        let resp = e.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_error_code_session_required() {
+        assert_eq!(CliError::SessionRequired.error_code(), ErrorCode::Session);
+    }
+
+    #[test]
+    fn test_exit_code_values() {
+        assert_eq!(ErrorCode::Success.exit_code(), 0);
+        assert_eq!(ErrorCode::Client.exit_code(), 1);
+        assert_eq!(ErrorCode::Server.exit_code(), 2);
+        assert_eq!(ErrorCode::Timeout.exit_code(), 3);
+        assert_eq!(ErrorCode::Session.exit_code(), 4);
+    }
+}
