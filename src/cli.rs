@@ -24,7 +24,7 @@ pub struct Cli {
     pub config: Option<String>,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     Text,
     Json,
@@ -103,7 +103,7 @@ pub struct SearchArgs {
     pub max_results: Option<usize>,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, ValueEnum)]
 pub enum TimeRange {
     Day,
     Week,
@@ -230,16 +230,16 @@ impl TabAction {
 
 #[derive(Parser, Debug)]
 pub struct KillArgs {
-    /// Browser session ID
+/// Browser session ID
     #[arg(long)]
-    pub id: String,
+    pub session: String,
 }
 
 #[derive(Parser, Debug)]
 pub struct SessionInfoArgs {
     /// Browser session ID
     #[arg(long)]
-    pub session: Option<String>,
+    pub session: String,
 }
 
 #[cfg(test)]
@@ -264,5 +264,112 @@ mod tests {
     #[test]
     fn test_tab_action_as_str_select() {
         assert_eq!(TabAction::Select.as_str(), "select");
+    }
+
+    #[test]
+    fn test_search_all_options() {
+        let cli = Cli::try_parse_from([
+            "searxng-cli",
+            "search",
+            "query",
+            "--category",
+            "news",
+            "--language",
+            "en",
+            "--time-range",
+            "week",
+            "--safe",
+            "true",
+            "--page",
+            "2",
+            "--max-results",
+            "10",
+        ])
+        .unwrap();
+        if let Command::Search(args) = &cli.command {
+            assert_eq!(args.query, "query");
+            assert_eq!(args.category, Some("news".to_string()));
+            assert_eq!(args.language, Some("en".to_string()));
+            assert_eq!(args.time_range, Some(TimeRange::Week));
+            assert_eq!(args.safe, Some(true));
+            assert_eq!(args.page, 2);
+            assert_eq!(args.max_results, Some(10));
+        } else {
+            panic!("Expected Search command");
+        }
+    }
+
+    #[test]
+    fn test_fetch_all_options() {
+        let cli = Cli::try_parse_from([
+            "searxng-cli",
+            "fetch",
+            "https://example.com",
+            "--max-chars",
+            "500",
+            "--timeout",
+            "10",
+            "--render",
+        ])
+        .unwrap();
+        if let Command::Fetch(args) = &cli.command {
+            assert_eq!(args.url, "https://example.com");
+            assert_eq!(args.max_chars, Some(500));
+            assert_eq!(args.timeout, Some(10));
+            assert!(args.render);
+        } else {
+            panic!("Expected Fetch command");
+        }
+    }
+
+    #[test]
+    fn test_time_range_enum_valid() {
+        for value in &["day", "week", "month", "year"] {
+            let result = Cli::try_parse_from([
+                "searxng-cli",
+                "search",
+                "query",
+                "--time-range",
+                value,
+            ]);
+            assert!(result.is_ok(), "Failed to parse time-range: {}", value);
+        }
+    }
+
+    #[test]
+    fn test_time_range_enum_invalid() {
+        let result = Cli::try_parse_from([
+            "searxng-cli",
+            "search",
+            "query",
+            "--time-range",
+            "invalid",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_global_option() {
+        let cli = Cli::try_parse_from(["searxng-cli", "--format", "json", "search", "query"]).unwrap();
+        assert_eq!(cli.format, OutputFormat::Json);
+
+        let cli = Cli::try_parse_from(["searxng-cli", "--format", "text", "search", "query"]).unwrap();
+        assert_eq!(cli.format, OutputFormat::Text);
+
+        let cli = Cli::try_parse_from(["searxng-cli", "--format", "markdown", "search", "query"]).unwrap();
+        assert_eq!(cli.format, OutputFormat::Markdown);
+
+        let result = Cli::try_parse_from(["searxng-cli", "--format", "invalid", "search", "query"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_search_default_page() {
+        let cli = Cli::try_parse_from(["searxng-cli", "search", "query"]).unwrap();
+        if let Command::Search(args) = &cli.command {
+            assert_eq!(args.page, 1);
+        } else {
+            panic!("Expected Search command");
+        }
     }
 }

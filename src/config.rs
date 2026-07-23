@@ -3,6 +3,35 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use crate::retry::RetryConfig;
+
+/// Cache configuration for search results.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CacheConfig {
+    #[serde(default = "default_search_ttl_secs")]
+    pub search_ttl_secs: u64,
+
+    #[serde(default = "default_max_entries")]
+    pub max_entries: u64,
+}
+
+fn default_search_ttl_secs() -> u64 {
+    300
+}
+
+fn default_max_entries() -> u64 {
+    200
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            search_ttl_secs: default_search_ttl_secs(),
+            max_entries: default_max_entries(),
+        }
+    }
+}
+
 /// Application configuration.
 ///
 /// Values are loaded with this precedence (lowest to highest):
@@ -23,6 +52,18 @@ pub struct Config {
 
     #[serde(default = "default_browser_server_url")]
     pub browser_server_url: String,
+
+    #[serde(default)]
+    pub retry: RetryConfig,
+
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: usize,
+
+    #[serde(default = "default_session_idle_timeout_secs")]
+    pub session_idle_timeout_secs: u64,
+
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 // defaults
@@ -37,6 +78,14 @@ fn default_server_port() -> u16 {
 
 fn default_browser_server_url() -> String {
     "http://localhost:18960".to_string()
+}
+
+fn default_max_sessions() -> usize {
+    8
+}
+
+fn default_session_idle_timeout_secs() -> u64 {
+    600
 }
 
 /// Resolve the XDG config path for `searxng-cli/config.yaml`.
@@ -102,6 +151,10 @@ impl Default for Config {
             server_port: default_server_port(),
             chrome_path: None,
             browser_server_url: default_browser_server_url(),
+            retry: RetryConfig::default(),
+            max_sessions: default_max_sessions(),
+            session_idle_timeout_secs: default_session_idle_timeout_secs(),
+            cache: CacheConfig::default(),
         }
     }
 }
@@ -114,6 +167,9 @@ impl fmt::Display for Config {
             writeln!(f, "Chrome path: {}", path)?;
         }
         writeln!(f, "Browser server URL: {}", self.browser_server_url)?;
+        writeln!(f, "Max sessions: {}", self.max_sessions)?;
+        writeln!(f, "Session idle timeout: {}s", self.session_idle_timeout_secs)?;
+        writeln!(f, "Cache TTL: {}s, max entries: {}", self.cache.search_ttl_secs, self.cache.max_entries)?;
         Ok(())
     }
 }
@@ -153,6 +209,13 @@ mod tests {
         assert_eq!(config.server_port, 18960);
         assert_eq!(config.chrome_path, None);
         assert_eq!(config.browser_server_url, "http://localhost:18960");
+        assert_eq!(config.retry.max_retries, 3);
+        assert_eq!(config.retry.base_delay_ms, 200);
+        assert_eq!(config.retry.timeout_secs, 15);
+        assert_eq!(config.max_sessions, 8);
+        assert_eq!(config.session_idle_timeout_secs, 600);
+        assert_eq!(config.cache.search_ttl_secs, 300);
+        assert_eq!(config.cache.max_entries, 200);
     }
 
     #[test]
@@ -244,6 +307,7 @@ mod tests {
         assert!(output.contains("SearXNG URL: http://localhost:8888"));
         assert!(output.contains("Server port: 18960"));
         assert!(!output.contains("Chrome path:"));
+        assert!(output.contains("Max sessions: 8"));
     }
 
     #[test]
@@ -253,6 +317,10 @@ mod tests {
             server_port: 18960,
             chrome_path: Some("/usr/bin/chrome".to_string()),
             browser_server_url: "http://localhost:18960".to_string(),
+            retry: RetryConfig::default(),
+            max_sessions: 8,
+            session_idle_timeout_secs: 600,
+            cache: CacheConfig::default(),
         };
         let output = format!("{}", config);
         assert!(output.contains("Chrome path: /usr/bin/chrome"));

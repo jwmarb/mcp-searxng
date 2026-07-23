@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Metadata attached to every response envelope.
+use crate::error::ApiError;
+use crate::time::format_timestamp;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseMetadata {
     pub duration_ms: u64,
@@ -17,86 +19,40 @@ impl ResponseMetadata {
     }
 }
 
-/// Wraps all CLI output in a consistent JSON envelope.
 #[derive(Debug, Clone, Serialize)]
-pub struct ResponseEnvelope<T: Serialize> {
-    pub status: String,
+pub struct ApiResponse<T: Serialize> {
+    pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<ResponseMetadata>,
+    pub error: Option<ApiError>,
+    pub metadata: ResponseMetadata,
 }
 
-impl<T: Serialize> ResponseEnvelope<T> {
-    /// Create a success envelope with data and metadata.
+impl<T: Serialize> ApiResponse<T> {
     pub fn success(data: T, started_at: Instant) -> Self {
         let elapsed = started_at.elapsed();
         Self {
-            status: "success".to_string(),
+            success: true,
             data: Some(data),
             error: None,
-            metadata: Some(ResponseMetadata::new(elapsed)),
+            metadata: ResponseMetadata::new(elapsed),
         }
     }
 
-    /// Create an error envelope (no data, includes timing metadata).
-    pub fn error(msg: impl Into<String>, started_at: Instant) -> Self {
+    pub fn error(api_error: ApiError, started_at: Instant) -> Self {
         let elapsed = started_at.elapsed();
         Self {
-            status: "error".to_string(),
+            success: false,
             data: None,
-            error: Some(msg.into()),
-            metadata: Some(ResponseMetadata::new(elapsed)),
+            error: Some(api_error),
+            metadata: ResponseMetadata::new(elapsed),
         }
     }
-}
 
-/// Format a Duration since UNIX_EPOCH as an ISO-8601 timestamp (no external crate).
-fn format_timestamp(dur: Duration) -> String {
-    let secs = dur.as_secs();
-    let nanos = dur.subsec_nanos();
-
-    let days = secs / 86_400;
-    let tod = secs % 86_400;
-    let hh = tod / 3600;
-    let mm = (tod % 3600) / 60;
-    let ss = tod % 60;
-
-    let mut y = 1970i64;
-    let mut d = days as i64;
-    loop {
-        let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-        let yd = if leap { 366 } else { 365 };
-        if d < yd {
-            break;
-        }
-        d -= yd;
-        y += 1;
+    pub fn from_cli_error(error: &crate::error::CliError, started_at: Instant) -> Self {
+        Self::error(error.to_api_error(), started_at)
     }
-
-    let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-    let months = if leap {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut m = 1u32;
-    let mut day = d as u32 + 1;
-    for &mlen in &months {
-        if day <= mlen {
-            break;
-        }
-        day -= mlen;
-        m += 1;
-    }
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z",
-        y, m, day, hh, mm, ss, nanos
-    )
 }
 
 #[cfg(test)]
@@ -104,29 +60,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_success_envelope_serializes() {
+    fn test_success_response_serializes() {
         let started_at = Instant::now();
-        let envelope: ResponseEnvelope<String> = ResponseEnvelope::success("hello".to_string(), started_at);
+        let resp: ApiResponse<String> = ApiResponse::success("hello".to_string(), started_at);
 
-        let json = serde_json::to_string(&envelope).unwrap();
-        assert!(json.contains(r#""status":"success""#));
-        assert!(json.contains(r#""data":"hello""#));
-        assert!(json.contains(r#""metadata""#));
-        assert!(json.contains(r#""duration_ms""#));
-        assert!(json.contains(r#""timestamp""#));
-        assert!(!json.contains(r#""error""#));
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["data"], "hello");
+        assert!(parsed["error"].is_null());
+        assert!(parsed["metadata"]["duration_ms"].is_number());
+        assert!(parsed["metadata"]["timestamp"].is_string());
+        assert!(parsed["metadata"]["timestamp"].as_str().unwrap().ends_with('Z'));
     }
 
     #[test]
-    fn test_error_envelope_serializes() {
+    fn test_error_response_serializes() {
         let started_at = Instant::now();
-        let envelope: ResponseEnvelope<String> = ResponseEnvelope::error("something went wrong", started_at);
+        let api_err = ApiError {
+            code: "test_error".to_string(),
+            message: "something went wrong".to_string(),
+            retryable: false,
+            hint: None,
+        };
+        let resp: ApiResponse<String> = ApiResponse::error(api_err, started_at);
 
-        let json = serde_json::to_string(&envelope).unwrap();
-        assert!(json.contains(r#""status":"error""#));
-        assert!(json.contains(r#""error":"something went wrong""#));
-        assert!(json.contains(r#""metadata""#));
-        assert!(!json.contains(r#""data""#));
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["success"], false);
+        assert!(parsed["data"].is_null());
+        assert!(parsed["error"].is_object());
+        assert_eq!(parsed["error"]["code"], "test_error");
+        assert_eq!(parsed["error"]["message"], "something went wrong");
+        assert!(parsed["metadata"]["duration_ms"].is_number());
+        assert!(parsed["metadata"]["timestamp"].is_string());
     }
 
     #[test]
@@ -138,37 +105,37 @@ mod tests {
     }
 
     #[test]
-    fn test_format_timestamp_epoch_zero() {
-        let ts = format_timestamp(Duration::from_secs(0));
-        assert_eq!(ts, "1970-01-01T00:00:00.000000000Z");
-    }
-
-    #[test]
-    fn test_format_timestamp_2023_jan_01() {
-        let ts = format_timestamp(Duration::from_secs(1672531200));
-        assert_eq!(ts, "2023-01-01T00:00:00.000000000Z");
-    }
-
-    #[test]
-    fn test_format_timestamp_leap_year_2020_jan_01() {
-        let ts = format_timestamp(Duration::from_secs(1577836800));
-        assert_eq!(ts, "2020-01-01T00:00:00.000000000Z");
-    }
-
-    #[test]
-    fn test_format_timestamp_with_nanos() {
-        let dur = Duration::new(0, 123_000_000);
-        let ts = format_timestamp(dur);
-        assert_eq!(ts, "1970-01-01T00:00:00.123000000Z");
-    }
-
-    #[test]
-    fn test_envelope_clone() {
+    fn test_response_clone() {
         let started_at = Instant::now();
-        let envelope: ResponseEnvelope<String> = ResponseEnvelope::success("test".to_string(), started_at);
-        let cloned = envelope.clone();
-        let json_orig = serde_json::to_string(&envelope).unwrap();
+        let resp: ApiResponse<String> = ApiResponse::success("test".to_string(), started_at);
+        let cloned = resp.clone();
+        let json_orig = serde_json::to_string(&resp).unwrap();
         let json_clone = serde_json::to_string(&cloned).unwrap();
         assert_eq!(json_orig, json_clone);
+    }
+
+    #[test]
+    fn test_success_response_without_data_serializes() {
+        let started_at = Instant::now();
+        let resp: ApiResponse<()> = ApiResponse::success((), started_at);
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["success"], true);
+        assert!(parsed["error"].is_null());
+    }
+
+    #[test]
+    fn test_response_from_cli_error() {
+        use crate::error::CliError;
+        let started_at = Instant::now();
+        let err = CliError::SessionNotFound("abc".to_string());
+        let resp: ApiResponse<()> = ApiResponse::from_cli_error(&err, started_at);
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["success"], false);
+        assert!(parsed["data"].is_null());
+        assert_eq!(parsed["error"]["code"], "session_not_found");
     }
 }

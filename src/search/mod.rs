@@ -2,32 +2,42 @@ pub mod types;
 
 pub use types::*;
 
-use std::time::Duration;
-
-use reqwest::Client;
-
 use crate::config::Config;
 use crate::error::Result;
+use crate::retry::RetryClient;
 
 pub struct Search {
-    client: Client,
+    client: RetryClient,
     base_url: String,
+    cache: moka::future::Cache<u64, SearchResponse>,
 }
 
 impl Search {
     pub fn new(config: &Config) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("reqwest client builder");
+        let client = RetryClient::new(&config.retry);
+        let cache = moka::future::Cache::builder()
+            .time_to_live(std::time::Duration::from_secs(config.cache.search_ttl_secs))
+            .max_capacity(config.cache.max_entries)
+            .build();
 
         Self {
             client,
             base_url: config.searxng_url.clone(),
+            cache,
         }
     }
 
+    pub async fn ping(&self) -> bool {
+        self.client.get(&self.base_url).await.is_ok()
+    }
+
     pub async fn search(&self, params: &SearchParams) -> Result<SearchResponse> {
+        let key = cache_key(params);
+
+        if let Some(cached) = self.cache.get(&key).await {
+            return Ok(cached);
+        }
+
         let mut url_str = self.base_url.clone();
         url_str.push_str("/search?q=");
         url_str.push_str(&url::form_urlencoded::byte_serialize(params.query.as_bytes())
@@ -59,7 +69,7 @@ impl Search {
             url_str.push_str(&max_results.to_string());
         }
 
-        let response = self.client.get(&url_str).send().await?;
+        let response = self.client.get(&url_str).await?;
 
         if !response.status().is_success() {
             return Err(crate::error::CliError::Searxng(format!(
@@ -70,6 +80,8 @@ impl Search {
 
         let body = response.text().await?;
         let result: SearchResponse = serde_json::from_str(&body)?;
+
+        self.cache.insert(key, result.clone()).await;
         Ok(result)
     }
 
@@ -122,6 +134,18 @@ fn format_as_markdown(response: &SearchResponse) -> String {
     }
 
     output
+}
+
+fn cache_key(params: &SearchParams) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    params.query.hash(&mut hasher);
+    params.categories.hash(&mut hasher);
+    params.language.hash(&mut hasher);
+    params.time_range.hash(&mut hasher);
+    params.safesearch.hash(&mut hasher);
+    params.page.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]

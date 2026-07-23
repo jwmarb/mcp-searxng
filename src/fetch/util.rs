@@ -99,42 +99,4 @@ mod tests {
         let result = truncate_content(content, 0);
         assert!(result.ends_with("..."));
     }
-
-    // truncate_content tests (from hybrid.rs)
-
-    #[test]
-    fn test_truncate_content_short() {
-        assert_eq!(truncate_content("short", 10), "short");
-    }
-
-    #[test]
-    fn test_truncate_content_exact() {
-        assert_eq!(truncate_content("exact", 5), "exact");
-    }
-
-    #[test]
-    fn test_truncate_content_over() {
-        let result = truncate_content("longer content", 5);
-        assert_eq!(result, "longe...");
-        assert!(result.len() <= 9);
-    }
-
-    #[test]
-    fn test_truncate_content_empty() {
-        assert_eq!(truncate_content("", 10), "");
-    }
-
-    #[test]
-    fn test_truncate_content_zero_max() {
-        let result = truncate_content("content", 0);
-        assert_eq!(result, "...");
-    }
-
-    #[test]
-    fn test_truncate_content_unicode_boundary() {
-        let content = "é".repeat(100);
-        let result = truncate_content(&content, 50);
-        assert!(result.ends_with("..."));
-        assert!(result.len() <= 53);
-    }
 }

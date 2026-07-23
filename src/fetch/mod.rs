@@ -9,19 +9,17 @@ use std::time::Duration;
 use reqwest::Client;
 
 use crate::error::Result;
+use crate::retry::RetryClient;
 
 pub struct Fetcher {
-    client: Client,
+    retry_client: RetryClient,
     config: Option<crate::config::Config>,
 }
 
 impl Fetcher {
-    pub fn new() -> Self {
+    pub fn new(retry_client: RetryClient) -> Self {
         Self {
-            client: Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("reqwest client builder"),
+            retry_client,
             config: None,
         }
     }
@@ -34,7 +32,7 @@ impl Fetcher {
     pub async fn fetch(&self, params: &FetchParams) -> Result<FetchResponse> {
         if params.render_mode == RenderMode::Render {
             let config = self.config.as_ref().cloned().unwrap_or_default();
-            return hybrid::hybrid_fetch(&config, params).await;
+            return hybrid::hybrid_fetch(&config, &self.retry_client, params).await;
         }
 
         let timeout = params.timeout.unwrap_or(30);
@@ -54,6 +52,7 @@ impl Fetcher {
 
         let max_chars = params.max_chars.unwrap_or(50_000);
         let content = util::truncate_content(&content, max_chars);
+        let content_len = content.len();
 
         Ok(FetchResponse {
             url: params.url.clone(),
@@ -61,7 +60,7 @@ impl Fetcher {
             content,
             format: ContentFormat::Markdown,
             status_code: status,
-            content_length: body.len(),
+            content_length: content_len,
         })
     }
 }

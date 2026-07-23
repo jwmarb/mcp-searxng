@@ -6,8 +6,9 @@ use tokio::sync::RwLock;
 
 use crate::error::{CliError, Result};
 use crate::browser::{BrowserPoolHandle, TabInfo};
+use crate::time::{instant_to_iso, iso_timestamp};
 
-use super::history::{with_history, HistoryEntry, instant_to_iso, iso_timestamp};
+use super::history::{with_history, HistoryEntry};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionInfo {
@@ -33,23 +34,6 @@ impl SessionManager {
         }
     }
 
-    pub async fn navigate(&self, id: &str, url: &str) -> Result<()> {
-        let start = Instant::now();
-        let mut ok = true;
-        if !self.pool.exists_session(id).await {
-            if self.pool.new_session(id).await.is_err() {
-                ok = false;
-            }
-        }
-        if ok && self.pool.goto(id, url).await.is_err() {
-            ok = false;
-        }
-        let result = if ok { Ok(()) } else { Err(CliError::Browser("Navigation failed".to_string())) };
-        let elapsed = start.elapsed().as_millis() as u64;
-        record_manual(&self.history, id, "navigate", url, elapsed, result.is_ok()).await;
-        result
-    }
-
     pub async fn snapshot(&self, id: &str) -> Result<String> {
         with_history(&self.history, id, "snapshot", "", || self.pool.snapshot(id)).await
     }
@@ -72,7 +56,7 @@ impl SessionManager {
     }
 
     pub async fn new_tab(&self, id: &str, url: Option<&str>) -> Result<()> {
-        let detail = url.map(|u| u.to_string()).unwrap_or_default();
+        let detail = url.unwrap_or_default().to_string();
         with_history(&self.history, id, "new_tab", &detail, || self.pool.new_tab(id, url)).await
     }
 
@@ -84,8 +68,21 @@ impl SessionManager {
         with_history(&self.history, id, "select_tab", &index.to_string(), || self.pool.select_tab(id, index)).await
     }
 
-    pub async fn list_tabs(&self, id: &str) -> Result<Vec<TabInfo>> {
-        self.pool.list_tabs(id).await
+    pub async fn navigate(&self, id: &str, url: &str) -> Result<()> {
+        let start = Instant::now();
+        let mut ok = true;
+        if !self.pool.exists_session(id).await {
+            if self.pool.new_session(id).await.is_err() {
+                ok = false;
+            }
+        }
+        if ok && self.pool.goto(id, url).await.is_err() {
+            ok = false;
+        }
+        let result = if ok { Ok(()) } else { Err(CliError::Browser("Navigation failed".to_string())) };
+        let elapsed = start.elapsed().as_millis() as u64;
+        record_manual(&self.history, id, "navigate", url, elapsed, result.is_ok()).await;
+        result
     }
 
     pub async fn kill(&self, id: &str) -> Result<()> {
@@ -95,6 +92,14 @@ impl SessionManager {
             hist.remove(id);
         }
         result
+    }
+
+    pub async fn list_tabs(&self, id: &str) -> Result<Vec<TabInfo>> {
+        self.pool.list_tabs(id).await
+    }
+
+    pub async fn pool_status(&self) -> crate::browser::pool::PoolStatus {
+        self.pool.pool_status().await
     }
 
     pub async fn list(&self) -> Vec<SessionInfo> {
@@ -138,43 +143,43 @@ async fn record_manual(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::history;
+    use crate::time;
     use std::time::Duration;
 
     #[test]
     fn test_format_timestamp_epoch_zero() {
-        let ts = history::format_timestamp(Duration::from_secs(0));
+        let ts = time::format_timestamp(Duration::from_secs(0));
         assert_eq!(ts, "1970-01-01T00:00:00.000000000Z");
     }
 
     #[test]
     fn test_format_timestamp_2023_jan_01() {
-        let ts = history::format_timestamp(Duration::from_secs(1672531200));
+        let ts = time::format_timestamp(Duration::from_secs(1672531200));
         assert_eq!(ts, "2023-01-01T00:00:00.000000000Z");
     }
 
     #[test]
     fn test_format_timestamp_leap_year_2020_jan_01() {
-        let ts = history::format_timestamp(Duration::from_secs(1577836800));
+        let ts = time::format_timestamp(Duration::from_secs(1577836800));
         assert_eq!(ts, "2020-01-01T00:00:00.000000000Z");
     }
 
     #[test]
     fn test_format_timestamp_year_end_boundary() {
-        let ts = history::format_timestamp(Duration::from_secs(1704067199));
+        let ts = time::format_timestamp(Duration::from_secs(1704067199));
         assert_eq!(ts, "2023-12-31T23:59:59.000000000Z");
     }
 
     #[test]
     fn test_format_timestamp_with_nanos() {
         let dur = Duration::new(0, 123456789);
-        let ts = history::format_timestamp(dur);
+        let ts = time::format_timestamp(dur);
         assert_eq!(ts, "1970-01-01T00:00:00.123456789Z");
     }
 
     #[test]
     fn test_iso_timestamp_valid_format() {
-        let ts = history::iso_timestamp();
+        let ts = time::iso_timestamp();
         assert_eq!(ts.len(), 30, "iso_timestamp produced invalid length: {}", ts);
         assert!(ts.ends_with('Z'), "iso_timestamp should end with Z: {}", ts);
         let parts: Vec<&str> = ts.splitn(2, 'T').collect();
@@ -182,8 +187,8 @@ mod tests {
         let date = parts[0];
         assert_eq!(date.len(), 10, "date part wrong length: {}", date);
         assert!(date.chars().nth(4).unwrap() == '-', "date format wrong: {}", date);
-        let time = parts[1].strip_suffix('Z').unwrap();
-        assert_eq!(time.len(), 18, "time part wrong length: {}", time);
+        let time_part = parts[1].strip_suffix('Z').unwrap();
+        assert_eq!(time_part.len(), 18, "time part wrong length: {}", time_part);
     }
 
     #[test]
@@ -231,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_format_timestamp_century_non_leap() {
-        let ts = history::format_timestamp(Duration::from_secs(4102444800));
+        let ts = time::format_timestamp(Duration::from_secs(4102444800));
         assert_eq!(ts, "2100-01-01T00:00:00.000000000Z");
     }
 }
