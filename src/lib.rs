@@ -1,6 +1,7 @@
 pub mod response;
 pub mod browser_client;
 pub mod cli;
+pub mod chromium_download;
 pub mod config;
 pub mod error;
 pub mod fetch;

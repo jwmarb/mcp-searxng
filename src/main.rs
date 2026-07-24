@@ -1,5 +1,6 @@
 mod browser;
 mod browser_client;
+mod chromium_download;
 mod cli;
 mod config;
 mod error;
@@ -17,6 +18,7 @@ use tokio::signal;
 
 use browser_client::BrowserClient;
 use crate::cli::{Cli, Command, OutputFormat, TimeRange};
+use crate::chromium_download::resolve_chrome_path;
 use crate::config::Config;
 use crate::error::Result;
 use crate::search::{Search, SearchParams, OutputFormat as SearchOutputFormat};
@@ -152,8 +154,10 @@ async fn run_fetch(config: &Config, args: &crate::cli::FetchArgs, _format: Outpu
 }
 
 async fn run_serve(config: &Config) -> Result<()> {
+    let chrome_path = resolve_chrome_path(config.chrome_path.as_deref()).await?;
+
     let browser_manager = Arc::new(BrowserManager::new());
-    browser_manager.launch(config.chrome_path.as_deref()).await?;
+    browser_manager.launch(Some(&chrome_path)).await?;
 
     let pool = BrowserPoolHandle::new(
         browser_manager.clone(),

@@ -23,6 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 base64 = "0.22"
 fastrand = "2"
 moka = { version = "0.12", features = ["future"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 wiremock = "0.6"
