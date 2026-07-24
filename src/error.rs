@@ -1,14 +1,10 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::response::ApiResponse;
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ErrorCode {
     Success,
@@ -21,11 +17,11 @@ pub enum ErrorCode {
 impl ErrorCode {
     pub fn exit_code(&self) -> i32 {
         match self {
-            ErrorCode::Success => 0,
-            ErrorCode::Client => 1,
-            ErrorCode::Server => 2,
-            ErrorCode::Timeout => 3,
-            ErrorCode::Session => 4,
+            Self::Success => 0,
+            Self::Client => 1,
+            Self::Server => 2,
+            Self::Timeout => 3,
+            Self::Session => 4,
         }
     }
 }
@@ -78,22 +74,17 @@ impl From<reqwest::Error> for CliError {
     }
 }
 
-impl IntoResponse for CliError {
-    fn into_response(self) -> axum::response::Response {
-        let status = match &self {
-            CliError::SessionNotFound(_) => StatusCode::NOT_FOUND,
-            CliError::SessionRequired => StatusCode::BAD_REQUEST,
-            CliError::ServerNotRunning => StatusCode::SERVICE_UNAVAILABLE,
-            CliError::Http(_) => StatusCode::BAD_GATEWAY,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        let api_error = self.to_api_error();
-        let response = ApiResponse::<()>::error(api_error, std::time::Instant::now());
-        (status, Json(response)).into_response()
-    }
-}
-
 impl CliError {
+    pub fn status_code(&self) -> StatusCode {
+        match self {
+            Self::SessionNotFound(_) => StatusCode::NOT_FOUND,
+            Self::SessionRequired => StatusCode::BAD_REQUEST,
+            Self::ServerNotRunning => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Http(_) => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
     pub fn error_code(&self) -> ErrorCode {
         match self {
             CliError::Searxng(_) => ErrorCode::Server,
@@ -170,6 +161,7 @@ pub type Result<T> = std::result::Result<T, CliError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::response::IntoResponse;
 
     #[test]
     fn test_to_string_searxng() {

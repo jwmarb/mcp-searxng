@@ -164,7 +164,7 @@ impl fmt::Display for Config {
         writeln!(f, "SearXNG URL: {}", self.searxng_url)?;
         writeln!(f, "Server port: {}", self.server_port)?;
         if let Some(ref path) = self.chrome_path {
-            writeln!(f, "Chrome path: {}", path)?;
+            writeln!(f, "Chrome path: {path}")?;
         }
         writeln!(f, "Browser server URL: {}", self.browser_server_url)?;
         writeln!(f, "Max sessions: {}", self.max_sessions)?;

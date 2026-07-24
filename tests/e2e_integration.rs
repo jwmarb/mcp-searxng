@@ -54,6 +54,18 @@ fn make_session_manager() -> SessionManager {
     SessionManager::new(pool)
 }
 
+/// Build a SessionManager with a LAUNCHED browser.
+/// Requires Chromium to be available on the system.
+async fn make_session_manager_with_browser() -> SessionManager {
+    let manager = Arc::new(BrowserManager::new());
+    let chrome_path = std::env::var("SEARXNG_CHROME_PATH")
+        .unwrap_or_else(|_| "/usr/bin/chromium".to_string());
+    manager.launch(Some(&chrome_path)).await
+        .expect("Failed to launch browser — is Chromium installed?");
+    let pool = BrowserPoolHandle::new(manager, 8, 600);
+    SessionManager::new(pool)
+}
+
 /// Start the axum server on a random port and return the base URL.
 /// The server task is returned so it can be joined when the test finishes.
 async fn start_server(session_manager: SessionManager) -> (String, tokio::task::JoinHandle<()>) {
@@ -94,7 +106,7 @@ async fn test_health_check_returns_200() {
 #[tokio::test]
 #[ignore] // requires Playwright
 async fn test_navigate_creates_session() {
-    let sm = make_session_manager();
+    let sm = make_session_manager_with_browser().await;
     let (base, task) = start_server(sm).await;
 
     let resp = reqwest::Client::new()
@@ -122,7 +134,7 @@ async fn test_navigate_creates_session() {
 #[tokio::test]
 #[ignore] // requires Playwright
 async fn test_snapshot_returns_data_field() {
-    let sm = make_session_manager();
+    let sm = make_session_manager_with_browser().await;
     let (base, task) = start_server(sm).await;
 
     // Navigate first to create the session
@@ -156,7 +168,7 @@ async fn test_snapshot_returns_data_field() {
 #[tokio::test]
 #[ignore] // requires Playwright
 async fn test_evaluate_returns_data_field() {
-    let sm = make_session_manager();
+    let sm = make_session_manager_with_browser().await;
     let (base, task) = start_server(sm).await;
 
     // Navigate first
@@ -197,7 +209,7 @@ async fn test_evaluate_returns_data_field() {
 #[tokio::test]
 #[ignore] // requires Playwright to create a real session
 async fn test_session_info_returns_iso8601_timestamps() {
-    let sm = make_session_manager();
+    let sm = make_session_manager_with_browser().await;
     let (base, task) = start_server(sm).await;
 
     // Create session via navigate
@@ -283,7 +295,7 @@ async fn test_kill_session_not_found() {
 #[tokio::test]
 #[ignore] // requires Playwright to create a real session first
 async fn test_kill_session_removes_session() {
-    let sm = make_session_manager();
+    let sm = make_session_manager_with_browser().await;
     let (base, task) = start_server(sm).await;
 
     // Create session
@@ -348,7 +360,7 @@ async fn test_instances_returns_empty_list() {
 #[tokio::test]
 #[ignore] // requires Playwright
 async fn test_instances_returns_session_list() {
-    let sm = make_session_manager();
+    let sm = make_session_manager_with_browser().await;
     let (base, task) = start_server(sm).await;
 
     reqwest::Client::new()

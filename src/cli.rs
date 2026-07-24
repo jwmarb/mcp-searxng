@@ -24,7 +24,7 @@ pub struct Cli {
     pub config: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
     Text,
     Json,
@@ -103,7 +103,7 @@ pub struct SearchArgs {
     pub max_results: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum TimeRange {
     Day,
     Week,
@@ -220,10 +220,10 @@ pub enum TabAction {
 impl TabAction {
     pub fn as_str(&self) -> &'static str {
         match self {
-            TabAction::List => "list",
-            TabAction::New => "new",
-            TabAction::Close => "close",
-            TabAction::Select => "select",
+            Self::List => "list",
+            Self::New => "new",
+            Self::Close => "close",
+            Self::Select => "select",
         }
     }
 }

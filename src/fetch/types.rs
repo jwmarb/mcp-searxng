@@ -11,16 +11,11 @@ pub struct FetchResponse {
     pub content_length: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ContentFormat {
+    #[default]
     Markdown,
     Text,
-}
-
-impl Default for ContentFormat {
-    fn default() -> Self {
-        Self::Markdown
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,16 +26,11 @@ pub struct FetchParams {
     pub render_mode: RenderMode,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum RenderMode {
+    #[default]
     Lightweight,
     Render,
-}
-
-impl Default for RenderMode {
-    fn default() -> Self {
-        Self::Lightweight
-    }
 }
 
 #[cfg(test)]

@@ -347,10 +347,6 @@ impl BrowserPoolHandle {
     }
 }
 
-fn get_session_mut<'a>(pool: &'a mut PoolInner, id: &str) -> Result<&'a mut SessionData> {
-    pool.sessions.get_mut(id).ok_or_else(|| CliError::SessionNotFound(id.to_string()))
-}
-
 fn get_session<'a>(pool: &'a PoolInner, id: &str) -> Result<&'a SessionData> {
     pool.sessions.get(id).ok_or_else(|| CliError::SessionNotFound(id.to_string()))
 }

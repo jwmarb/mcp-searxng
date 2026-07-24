@@ -43,7 +43,7 @@ impl SessionManager {
     }
 
     pub async fn fill(&self, id: &str, selector: &str, value: &str) -> Result<()> {
-        let detail = format!("{} = {}", selector, value);
+        let detail = format!("{selector} = {value}");
         with_history(&self.history, id, "fill", &detail, || self.pool.fill(id, selector, value)).await
     }
 
@@ -71,10 +71,10 @@ impl SessionManager {
     pub async fn navigate(&self, id: &str, url: &str) -> Result<()> {
         let start = Instant::now();
         let mut ok = true;
-        if !self.pool.exists_session(id).await {
-            if self.pool.new_session(id).await.is_err() {
-                ok = false;
-            }
+        if !self.pool.exists_session(id).await
+            && self.pool.new_session(id).await.is_err()
+        {
+            ok = false;
         }
         if ok && self.pool.goto(id, url).await.is_err() {
             ok = false;

@@ -18,7 +18,7 @@ use tokio::signal;
 use browser_client::BrowserClient;
 use crate::cli::{Cli, Command, OutputFormat, TimeRange};
 use crate::config::Config;
-use crate::error::{CliError, Result};
+use crate::error::Result;
 use crate::search::{Search, SearchParams, OutputFormat as SearchOutputFormat};
 use crate::fetch::{Fetcher, FetchParams, RenderMode};
 use crate::browser::BrowserManager;
@@ -43,18 +43,58 @@ async fn main() -> Result<()> {
         Command::Search(args) => run_search(&config, &args, cli.format).await?,
         Command::Fetch(args) => run_fetch(&config, &args, cli.format).await?,
         Command::Serve => run_serve(&config).await?,
-        Command::Navigate(args) => run_navigate(&args).await?,
-        Command::Snapshot(args) => run_snapshot(&args).await?,
-        Command::Click(args) => run_click(&args).await?,
-        Command::Fill(args) => run_fill(&args).await?,
-        Command::Evaluate(args) => run_evaluate(&args).await?,
-        Command::Screenshot(args) => run_screenshot(&args).await?,
-        Command::Tabs(args) => run_tabs(&args).await?,
-        Command::Instances => run_instances().await?,
-        Command::Kill(args) => run_kill(&args).await?,
-        Command::SessionInfo(args) => run_session_info(&args.session).await?,
+        command => {
+            let client = BrowserClient::new(&config);
+            run_browser_command(&client, command).await?;
+        }
     }
 
+    Ok(())
+}
+
+async fn run_browser_command(client: &BrowserClient, command: Command) -> Result<()> {
+    match command {
+        Command::Navigate(args) => {
+            client.navigate(&args.session, &args.url).await?;
+            println!("Navigation successful");
+        }
+        Command::Snapshot(args) => {
+            let content = client.snapshot(&args.session).await?;
+            println!("{content}");
+        }
+        Command::Click(args) => {
+            client.click(&args.session, &args.selector).await?;
+            println!("Click successful");
+        }
+        Command::Fill(args) => {
+            client.fill(&args.session, &args.selector, &args.value).await?;
+            println!("Fill successful");
+        }
+        Command::Evaluate(args) => {
+            let result = client.evaluate(&args.session, &args.js).await?;
+            println!("{result}");
+        }
+        Command::Screenshot(args) => {
+            client.screenshot(&args.session, args.file.as_deref()).await?;
+        }
+        Command::Tabs(args) => {
+            let body = client.tabs(&args.session, args.action.as_ref().map(|a| a.as_str()), args.url.as_deref()).await?;
+            println!("{}", serde_json::to_string_pretty(&body as &serde_json::Value)?);
+        }
+        Command::Instances => {
+            let body = client.instances().await?;
+            println!("{}", serde_json::to_string_pretty(&body as &serde_json::Value)?);
+        }
+        Command::Kill(args) => {
+            client.kill(&args.session).await?;
+            println!("Session {} killed", args.session);
+        }
+        Command::SessionInfo(args) => {
+            let info = client.session_info(&args.session).await?;
+            println!("{}", serde_json::to_string_pretty(&info)?);
+        }
+        _ => unreachable!(),
+    }
     Ok(())
 }
 
@@ -85,7 +125,7 @@ safesearch: args.safe.map(|s| if s { 1 } else { 0 }),
 
     let response = search.search(&params).await?;
     let output = Search::format_response(&response, output_format);
-    println!("{}", output);
+    println!("{output}");
 
     Ok(())
 }
@@ -127,15 +167,15 @@ async fn run_serve(config: &Config) -> Result<()> {
 
     let app = create_router(session_manager, search, config_arc);
 
-    let addr = format!("127.0.0.1:{}", config.server_port);
+    let addr = format!("127.0.0.1:{port}", port = config.server_port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    println!("Server listening on {}", addr);
+    println!("Server listening on {addr}");
 
     tokio::select! {
         result = axum::serve(listener, app) => {
             if let Err(e) = result {
-                eprintln!("Server error: {}", e);
+                eprintln!("Server error: {e}");
             }
         }
         _ = signal::ctrl_c() => {
@@ -144,81 +184,5 @@ async fn run_serve(config: &Config) -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-async fn run_navigate(args: &crate::cli::NavigateArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    client.navigate(session_id, &args.url).await?;
-    println!("Navigation successful");
-    Ok(())
-}
-
-async fn run_snapshot(args: &crate::cli::SnapshotArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    let content = client.snapshot(session_id).await?;
-    println!("{}", content);
-    Ok(())
-}
-
-async fn run_click(args: &crate::cli::ClickArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    client.click(session_id, &args.selector).await?;
-    println!("Click successful");
-    Ok(())
-}
-
-async fn run_fill(args: &crate::cli::FillArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    client.fill(session_id, &args.selector, &args.value).await?;
-    println!("Fill successful");
-    Ok(())
-}
-
-async fn run_evaluate(args: &crate::cli::EvaluateArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    let result = client.evaluate(session_id, &args.js).await?;
-    println!("{}", result);
-    Ok(())
-}
-
-async fn run_screenshot(args: &crate::cli::ScreenshotArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    client.screenshot(session_id, args.file.as_deref()).await?;
-    Ok(())
-}
-
-async fn run_tabs(args: &crate::cli::TabsArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let session_id = &args.session;
-    let body = client.tabs(session_id, args.action.as_ref().map(|a| a.as_str()), args.url.as_deref()).await?;
-    println!("{}", serde_json::to_string_pretty(&body as &serde_json::Value)?);
-    Ok(())
-}
-
-async fn run_instances() -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let body = client.instances().await?;
-    println!("{}", serde_json::to_string_pretty(&body as &serde_json::Value)?);
-    Ok(())
-}
-
-async fn run_kill(args: &crate::cli::KillArgs) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    client.kill(&args.session).await?;
-    println!("Session {} killed", args.session);
-    Ok(())
-}
-
-async fn run_session_info(session: &str) -> Result<()> {
-    let client = BrowserClient::new(&Config::load());
-    let info = client.session_info(session).await?;
-    println!("{}", serde_json::to_string_pretty(&info)?);
     Ok(())
 }

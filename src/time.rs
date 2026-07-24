@@ -42,7 +42,7 @@ pub fn format_timestamp(dur: Duration) -> String {
     }
     let day = d + 1;
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z", y, m, day, hh, mm, ss, nanos)
+    format!("{y:04}-{m:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}.{nanos:09}Z")
 }
 
 #[cfg(test)]

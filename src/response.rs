@@ -1,7 +1,9 @@
+use axum::response::IntoResponse;
+use axum::Json;
 use serde::Serialize;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::error::ApiError;
+use crate::error::{ApiError, CliError};
 use crate::time::format_timestamp;
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +54,15 @@ impl<T: Serialize> ApiResponse<T> {
 
     pub fn from_cli_error(error: &crate::error::CliError, started_at: Instant) -> Self {
         Self::error(error.to_api_error(), started_at)
+    }
+}
+
+impl IntoResponse for CliError {
+    fn into_response(self) -> axum::response::Response {
+        let status = self.status_code();
+        let api_error = self.to_api_error();
+        let response = ApiResponse::<()>::error(api_error, std::time::Instant::now());
+        (status, Json(response)).into_response()
     }
 }
 

@@ -129,7 +129,7 @@ fn format_as_markdown(response: &SearchResponse) -> String {
             } else {
                 result.content.clone()
             };
-            output.push_str(&format!("{}\n\n", truncated));
+            output.push_str(&format!("{truncated}\n\n"));
         }
     }
 

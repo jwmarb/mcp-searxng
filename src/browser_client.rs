@@ -69,7 +69,7 @@ impl BrowserClient {
 
     pub async fn snapshot(&self, session_id: &str) -> Result<String> {
         let body: serde_json::Value = self.get_json(
-            &format!("/api/snapshot?session={}", session_id)
+            &format!("/api/snapshot?session={session_id}")
         ).await?;
         Ok(body["data"].as_str().unwrap_or("").to_string())
     }
@@ -107,10 +107,10 @@ impl BrowserClient {
             let bytes = response.bytes().await?;
             if let Some(path) = file_path {
                 std::fs::write(path, &bytes)?;
-                println!("Screenshot saved to {}", path);
+                println!("Screenshot saved to {path}");
             } else {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                println!("{}", encoded);
+                println!("{encoded}");
             }
             Ok(())
         } else {
@@ -144,7 +144,7 @@ impl BrowserClient {
     }
 
     pub async fn session_info(&self, session_id: &str) -> Result<serde_json::Value> {
-        self.get_json(&format!("/api/session/{}?info=true", session_id)).await
+        self.get_json(&format!("/api/session/{session_id}?info=true")).await
     }
 }
 
