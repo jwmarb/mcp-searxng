@@ -5,7 +5,7 @@ use crate::retry::RetryClient;
 
 use super::util::{extract_title, truncate_content};
 
-const JS_HEAVY_THRESHOLD: usize = 100;
+const JS_HEAVY_THRESHOLD: usize = 500;
 
 pub async fn hybrid_fetch(
     config: &Config,
@@ -80,13 +80,22 @@ async fn browser_fetch(
         .await
         .map_err(|e| CliError::Browser(format!("Browser snapshot failed: {e}")))?;
 
-    let snapshot_text = snapshot_resp
-        .text()
+    let snapshot_json: serde_json::Value = snapshot_resp
+        .json()
         .await
-        .map_err(|e| CliError::Browser(format!("Failed to read snapshot: {e}")))?;
+        .map_err(|e| CliError::Browser(format!("Failed to parse snapshot JSON: {e}")))?;
 
-    let title = extract_title_from_snapshot(&snapshot_text);
-    let content = clean_snapshot_content(&snapshot_text);
+    let html = snapshot_json["data"]
+        .as_str()
+        .ok_or_else(|| CliError::Browser("Snapshot data missing".to_string()))?;
+
+    let status_code = get_page_status(client, &session_id, browser_url).await;
+
+    let title = super::util::extract_title(html);
+    let content = html_to_markdown_rs::convert(html, None)
+        .unwrap_or_default()
+        .content
+        .unwrap_or_default();
     let max_chars = params.max_chars.unwrap_or(50_000);
     let content = truncate_content(&content, max_chars);
     let content_len = content.len();
@@ -104,83 +113,30 @@ async fn browser_fetch(
         title,
         content,
         format: ContentFormat::Markdown,
-        status_code: 200,
+        status_code,
         content_length: content_len,
     })
 }
 
-fn extract_title_from_snapshot(snapshot: &str) -> String {
-    for line in snapshot.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("# ") {
-            return trimmed.strip_prefix("# ").unwrap_or(trimmed).to_string();
+async fn get_page_status(client: &RetryClient, session_id: &str, browser_url: &str) -> u16 {
+    let resp = client
+        .post_json(
+            &format!("{browser_url}/api/evaluate"),
+            &serde_json::json!({
+                "session": session_id,
+                "script": "performance.getEntriesByType('navigation')[0]?.responseStatus || 200"
+            }),
+        )
+        .await;
+
+    if let Ok(json) = resp {
+        if let Ok(data) = json.json::<serde_json::Value>().await {
+            if let Some(status) = data["data"].as_u64() {
+                if (100..600).contains(&status) {
+                    return status as u16;
+                }
+            }
         }
     }
-    String::new()
-}
-
-fn clean_snapshot_content(snapshot: &str) -> String {
-    snapshot
-        .lines()
-        .filter(|line| !line.trim().starts_with("[box="))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_title_from_snapshot_h1() {
-        let snapshot = "# Page Title\ncontent here";
-        assert_eq!(extract_title_from_snapshot(snapshot), "Page Title");
-    }
-
-    #[test]
-    fn test_extract_title_from_snapshot_h2_ignored() {
-        let snapshot = "## Not h1\ncontent";
-        assert_eq!(extract_title_from_snapshot(snapshot), "");
-    }
-
-    #[test]
-    fn test_extract_title_from_snapshot_no_heading() {
-        let snapshot = "No heading here";
-        assert_eq!(extract_title_from_snapshot(snapshot), "");
-    }
-
-    #[test]
-    fn test_extract_title_from_snapshot_indented() {
-        let snapshot = "  # Indented Title";
-        assert_eq!(extract_title_from_snapshot(snapshot), "Indented Title");
-    }
-
-    #[test]
-    fn test_extract_title_from_snapshot_multiple() {
-        let snapshot = "# First\n# Second";
-        assert_eq!(extract_title_from_snapshot(snapshot), "First");
-    }
-
-    #[test]
-    fn test_clean_snapshot_content_removes_box_lines() {
-        let snapshot = "[box=1,2,3,4]\nNormal Line\n[box=5,6,7,8]";
-        assert_eq!(clean_snapshot_content(snapshot), "Normal Line");
-    }
-
-    #[test]
-    fn test_clean_snapshot_content_keeps_normal_lines() {
-        let snapshot = "Line 1\nLine 2\nLine 3";
-        assert_eq!(clean_snapshot_content(snapshot), "Line 1\nLine 2\nLine 3");
-    }
-
-    #[test]
-    fn test_clean_snapshot_content_empty() {
-        assert_eq!(clean_snapshot_content(""), "");
-    }
-
-    #[test]
-    fn test_clean_snapshot_content_preserves_whitespace() {
-        let snapshot = "  Indented\n[box=1,2,3,4]";
-        assert_eq!(clean_snapshot_content(snapshot), "  Indented");
-    }
+    200
 }
