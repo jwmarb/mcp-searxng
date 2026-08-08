@@ -7,7 +7,7 @@ use crate::error::CliError;
 use crate::response::ApiResponse;
 use crate::server::session::SessionManager;
 
-use crate::server::routes::respond;
+use crate::server::routes::{respond, bad_request_response};
 
 #[derive(Deserialize)]
 pub(crate) struct NavigateReq {
@@ -47,11 +47,16 @@ pub(crate) struct ScreenshotReq {
 #[derive(Deserialize)]
 pub(crate) struct TabsReq {
     pub(crate) session: String,
+    #[serde(default = "default_tab_action")]
     pub(crate) action: String,
     #[serde(default)]
     pub(crate) index: Option<usize>,
     #[serde(default)]
     pub(crate) url: Option<String>,
+}
+
+fn default_tab_action() -> String {
+    "list".to_string()
 }
 
 #[derive(Deserialize)]
@@ -160,8 +165,7 @@ pub(crate) async fn tabs(
             }
         }
         _ => {
-            let err = CliError::Browser("Unknown tab action".to_string());
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::from_cli_error(&err, started_at)))
+            bad_request_response::<serde_json::Value>("Unknown tab action. Use list, new, close, or select.")
         }
     }
 }
@@ -238,6 +242,16 @@ mod tests {
     #[test]
     fn test_tabs_req_with_defaults() {
         let data = json!({"session": "sess-1", "action": "list"});
+        let req: TabsReq = serde_json::from_value(data).unwrap();
+        assert_eq!(req.session, "sess-1");
+        assert_eq!(req.action, "list");
+        assert_eq!(req.index, None);
+        assert_eq!(req.url, None);
+    }
+
+    #[test]
+    fn test_tabs_req_without_action_defaults_to_list() {
+        let data = json!({"session": "sess-1"});
         let req: TabsReq = serde_json::from_value(data).unwrap();
         assert_eq!(req.session, "sess-1");
         assert_eq!(req.action, "list");
