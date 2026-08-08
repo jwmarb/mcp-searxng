@@ -79,7 +79,14 @@ impl Search {
         }
 
         let body = response.text().await?;
-        let result: SearchResponse = serde_json::from_str(&body)?;
+        let mut result: SearchResponse = serde_json::from_str(&body)?;
+
+        // Enforce max_results client-side (SearXNG may ignore number_of_results param)
+        if let Some(max) = params.max_results {
+            if result.results.len() > max {
+                result.results.truncate(max);
+            }
+        }
 
         self.cache.insert(key, result.clone()).await;
         Ok(result)
@@ -145,6 +152,7 @@ fn cache_key(params: &SearchParams) -> u64 {
     params.time_range.hash(&mut hasher);
     params.safesearch.hash(&mut hasher);
     params.page.hash(&mut hasher);
+    params.max_results.hash(&mut hasher);
     hasher.finish()
 }
 
