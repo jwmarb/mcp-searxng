@@ -11,6 +11,7 @@ mod search;
 mod server;
 mod time;
 
+use std::process;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -20,7 +21,7 @@ use browser_client::BrowserClient;
 use crate::cli::{Cli, Command, OutputFormat, TimeRange};
 use crate::chromium_download::resolve_chrome_path;
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{CliError, Result};
 use crate::search::{Search, SearchParams, OutputFormat as SearchOutputFormat};
 use crate::fetch::{Fetcher, FetchParams, RenderMode};
 use crate::browser::BrowserManager;
@@ -30,7 +31,7 @@ use crate::server::session::SessionManager;
 use crate::server::routes::create_router;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let cli = Cli::parse();
     let mut config = Config::load_with_path(cli.config.clone());
 
@@ -41,28 +42,52 @@ async fn main() -> Result<()> {
         config.server_port = port;
     }
 
-    match cli.command {
-        Command::Search(args) => run_search(&config, &args, cli.format).await?,
-        Command::Fetch(args) => run_fetch(&config, &args, cli.format).await?,
-        Command::Serve => run_serve(&config).await?,
+    let result = match cli.command {
+        Command::Search(args) => run_search(&config, &args, cli.format).await,
+        Command::Fetch(args) => run_fetch(&config, &args, cli.format).await,
+        Command::Serve => run_serve(&config).await,
         command => {
             let client = BrowserClient::new(&config);
-            run_browser_command(&client, command).await?;
+            run_browser_command(&client, command, cli.format).await
         }
-    }
+    };
 
-    Ok(())
+    if let Err(err) = result {
+        eprintln!("Error: {err}");
+        let exit_code = err.error_code().exit_code();
+        process::exit(exit_code);
+    }
 }
 
-async fn run_browser_command(client: &BrowserClient, command: Command) -> Result<()> {
+async fn run_browser_command(client: &BrowserClient, command: Command, format: OutputFormat) -> Result<()> {
     match command {
         Command::Navigate(args) => {
             client.navigate(&args.session, &args.url).await?;
             println!("Navigation successful");
         }
         Command::Snapshot(args) => {
-            let content = client.snapshot(&args.session).await?;
-            println!("{content}");
+            let html = client.snapshot(&args.session).await?;
+            match format {
+                OutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                        "html": html
+                    }))?);
+                }
+                OutputFormat::Text => {
+                    let md = html_to_markdown_rs::convert(&html, None)
+                        .unwrap_or_default()
+                        .content
+                        .unwrap_or_default();
+                    println!("{}", md);
+                }
+                OutputFormat::Markdown => {
+                    let md = html_to_markdown_rs::convert(&html, None)
+                        .unwrap_or_default()
+                        .content
+                        .unwrap_or_default();
+                    println!("{}", md);
+                }
+            }
         }
         Command::Click(args) => {
             client.click(&args.session, &args.selector).await?;
@@ -81,11 +106,13 @@ async fn run_browser_command(client: &BrowserClient, command: Command) -> Result
         }
         Command::Tabs(args) => {
             let body = client.tabs(&args.session, args.action.as_ref().map(|a| a.as_str()), args.url.as_deref()).await?;
-            println!("{}", serde_json::to_string_pretty(&body as &serde_json::Value)?);
+            let data = body.get("data").unwrap_or(&body);
+            print_value(data, &format);
         }
         Command::Instances => {
             let body = client.instances().await?;
-            println!("{}", serde_json::to_string_pretty(&body as &serde_json::Value)?);
+            let data = body.get("data").unwrap_or(&body);
+            print_value(data, &format);
         }
         Command::Kill(args) => {
             client.kill(&args.session).await?;
@@ -93,11 +120,106 @@ async fn run_browser_command(client: &BrowserClient, command: Command) -> Result
         }
         Command::SessionInfo(args) => {
             let info = client.session_info(&args.session).await?;
-            println!("{}", serde_json::to_string_pretty(&info)?);
+            let data = info.get("data").unwrap_or(&info);
+            print_value(data, &format);
         }
         _ => unreachable!(),
     }
     Ok(())
+}
+
+fn print_value(value: &serde_json::Value, format: &OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(value).unwrap_or_default());
+        }
+        OutputFormat::Text => print_text(value),
+        OutputFormat::Markdown => print_markdown(value),
+    }
+}
+
+fn print_text(value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Array(arr) => {
+            if arr.is_empty() {
+                println!("No results");
+                return;
+            }
+            for (i, item) in arr.iter().enumerate() {
+                match item {
+                    serde_json::Value::Object(obj) => {
+                        if obj.contains_key("title") && obj.contains_key("url") {
+                            println!("{}. {} ({})", i + 1,
+                                obj.get("title").and_then(|v| v.as_str()).unwrap_or("N/A"),
+                                obj.get("url").and_then(|v| v.as_str()).unwrap_or("N/A"));
+                        } else if obj.contains_key("id") || obj.contains_key("session") {
+                            let id = obj.get("id").or(obj.get("session"))
+                                .and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let url = obj.get("active_url").and_then(|v| v.as_str()).unwrap_or("N/A");
+                            println!("{}. {} ({})", i + 1, id, url);
+                        } else {
+                            println!("{}. {}", i + 1, serde_json::to_string(item).unwrap_or_default());
+                        }
+                    }
+                    _ => println!("{}. {}", i + 1, item),
+                }
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            for (key, val) in obj.iter() {
+                match val {
+                    serde_json::Value::String(s) => println!("{}: {}", key, s),
+                    serde_json::Value::Number(n) => println!("{}: {}", key, n),
+                    serde_json::Value::Bool(b) => println!("{}: {}", key, b),
+                    serde_json::Value::Null => println!("{}: (null)", key),
+                    _ => {}
+                }
+            }
+        }
+        _ => println!("{}", serde_json::to_string_pretty(value).unwrap_or_default()),
+    }
+}
+
+fn print_markdown(value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Array(arr) => {
+            if arr.is_empty() {
+                println!("No results");
+                return;
+            }
+            for item in arr.iter() {
+                match item {
+                    serde_json::Value::Object(obj) => {
+                        if obj.contains_key("title") && obj.contains_key("url") {
+                            let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("N/A");
+                            let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("N/A");
+                            println!("- [{}]({})", title, url);
+                        } else if obj.contains_key("id") || obj.contains_key("session") {
+                            let id = obj.get("id").or(obj.get("session"))
+                                .and_then(|v| v.as_str()).unwrap_or("unknown");
+                            let url = obj.get("active_url").and_then(|v| v.as_str()).unwrap_or("N/A");
+                            println!("- **{}**: {}", id, url);
+                        } else {
+                            println!("- {}", serde_json::to_string(item).unwrap_or_default());
+                        }
+                    }
+                    _ => println!("- {}", item),
+                }
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            for (key, val) in obj.iter() {
+                match val {
+                    serde_json::Value::String(s) => println!("**{}**: {}", key, s),
+                    serde_json::Value::Number(n) => println!("**{}**: {}", key, n),
+                    serde_json::Value::Bool(b) => println!("**{}**: {}", key, b),
+                    serde_json::Value::Null => println!("**{}**: *(null)*", key),
+                    _ => {}
+                }
+            }
+        }
+        _ => println!("{}", serde_json::to_string_pretty(value).unwrap_or_default()),
+    }
 }
 
 async fn run_search(config: &Config, args: &crate::cli::SearchArgs, format: OutputFormat) -> Result<()> {
@@ -132,7 +254,7 @@ safesearch: args.safe.map(|s| if s { 1 } else { 0 }),
     Ok(())
 }
 
-async fn run_fetch(config: &Config, args: &crate::cli::FetchArgs, _format: OutputFormat) -> Result<()> {
+async fn run_fetch(config: &Config, args: &crate::cli::FetchArgs, format: OutputFormat) -> Result<()> {
     let retry_client = RetryClient::new(&config.retry);
     let fetcher = Fetcher::new(retry_client).with_config(config.clone());
 
@@ -148,7 +270,33 @@ async fn run_fetch(config: &Config, args: &crate::cli::FetchArgs, _format: Outpu
     };
 
     let response = fetcher.fetch(&params).await?;
-    println!("{}", serde_json::to_string_pretty(&response)?);
+
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+        OutputFormat::Text => {
+            println!("Title: {}", response.title);
+            println!("URL: {}", response.url);
+            println!("Status: {}", response.status_code);
+            if let Some(max) = args.max_chars {
+                let content = crate::fetch::util::truncate_content(&response.content, max);
+                println!("\n{}", content);
+            } else {
+                println!("\n{}", response.content);
+            }
+        }
+        OutputFormat::Markdown => {
+            println!("{} ({})", response.title, response.url);
+            println!("Status: {}", response.status_code);
+            if let Some(max) = args.max_chars {
+                let content = crate::fetch::util::truncate_content(&response.content, max);
+                println!("\n{}", content);
+            } else {
+                println!("\n{}", response.content);
+            }
+        }
+    }
 
     Ok(())
 }
